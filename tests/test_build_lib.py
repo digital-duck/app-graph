@@ -208,7 +208,7 @@ def test_writes_stay_inside_the_output_folder(tmp_path):
         assert files.inside(tmp_path, bad) is None, bad
     import pytest
     with pytest.raises(ValueError):
-        files.write_test_file(tmp_path, "../evil", "print(1)\n")
+        files.write_test_file(tmp_path, "x/../../evil", "print(1)\n")
 
 
 def test_recipes_get_this_python(monkeypatch, tmp_path):

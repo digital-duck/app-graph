@@ -205,6 +205,25 @@ outputs:  manifest, test_summary
 - Removed `APPGRAPH_WRITE_ROOTS`: the error catalogues suggested it, but a recipe's SOLVE step never receives that variable, so it could not work.
 - **Phase 6 is not done.** It covers the `expand:` form, `graf vis` pictures, IDE progress and prompt work. All of it is optional and left for a decision.
 
+## Reconciling the Sonnet review (2026-11-22)
+
+`graflang-refactor-review-by-sonnet.md` reviewed this plan before Phase 1. All eight points are accepted; the table at the end of the review says, per point, what the built code does. Most were already handled by the build; the changes made for the review:
+
+- **Writes are confined, not just attested.** The Cedar guard before a writing step only attests that the output folder is acceptable (`write_ok`, computed by the step before it; Cedar cannot compare a path with a variable). `build/files.inside()` now refuses a node file or acceptance test whose path leaves that folder.
+- **A recipe's `python3` is this interpreter** (`run.own_python()`), not whatever `python3` comes first on PATH.
+- **Prompt inputs are ordered** identifiers first, free text last, so a spec or code that happens to contain `{{in_x}}` is not expanded (GraphLang substitutes in `in:` order and rescans).
+
+### Upstream items for GraphLang
+
+Collected here, to raise with GraphLang (and work-graph, which needs the same):
+
+1. A shared `run_recipe` helper (work-graph's `recipes.Recipe` and app-graph's `run.py` do the same job).
+2. Resolve `python3` in a SOLVE command to the running interpreter.
+3. Single-pass prompt substitution (no rescanning of substituted values).
+4. An output budget on GENERATE (`max_tokens`; spl3 had `WITH OUTPUT BUDGET`).
+5. A public way to set an adapter's timeout (`run.py` reaches `inner._adapters`).
+6. Report which exit a top-level run ended at.
+
 ## 5. What does not change
 
 The blueprint schema (v2.1/v2.2) and every blueprint file; `validate`, `order`, `report`, `prettify`, `new-app`, `validate-all`, `diagram`, `drift` (without `--llm`), `ide`, `tools clean-port`/`scaffold-*`/`suggest-graph-clusters` behave as today under the new command name; the generated code layout (`NODE_FILES`, `{output_dir}/{component}`); the `.spl_cache` key (so a cache from graph-code can be reused: verify); the default work folders (`~/graph-code/{input,output,report,ide}` → renamed with the package, decision 1).
@@ -266,7 +285,7 @@ Both file kinds end in `.graph.yaml` (GraphLang's naming rule: semantic infix + 
 
 [WEN] go with your recommend, use docker to test
 
-**Recorded:** risky steps behind a Cedar `GUARD`; the component test run is a containerized SOLVE (Docker; Docker Desktop 24.0.7 is on this machine), not a host subprocess. The image per profile is a build input (python: a `python:3.12` image with the profile's test deps; vue: a Node image).
+**Recorded:** risky steps behind a Cedar `GUARD`; the component test run is a containerized SOLVE (Docker; Docker Desktop 24.0.7 is on this machine), not a host subprocess. The image per profile is a build input (python: a `python:3.12` image with the profile's test deps; vue: a Node image). *Amended after the Sonnet review:* the guard is an **attestation**, not a sandbox. The step before it computes `write_ok` (absolute, under home or the temp folder) and the policy permits only when it holds, because Cedar cannot compare a path with a variable. Each file write is confined by `build/files.inside()`. Containers get the code on stdin, with `mount: none`.
 
 6. **spl-llm.** Dropped entirely at the end of Phase 5 (recommended), or kept as an extra so someone can still run the old `.spl` workflows from app-graph? graph-code itself keeps them either way.
 

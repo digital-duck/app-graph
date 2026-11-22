@@ -93,13 +93,15 @@ The shared helper exists, in `work-graph/src/workgraph/recipes/__init__.py`:
 
 ## Reconciliation (Opus 5.5 fills in)
 
+The review read the plan before Phase 1; Phases 1–5 and 7 were built by the time it was reconciled (2026-11-22), so each row says what the built code does.
+
 | Item | Accept / reject / change | Where recorded |
 |---|---|---|
-| 1 Docker spike, container optional | | |
-| 2 GUARD as attestation | | |
-| 3 `python3` token / `sys.executable` | | |
-| 4 LOOP wiring note | | |
-| 5 prompt substitution order | | |
-| 6 server stop on every path, first check of Phase 4 | | |
-| 7 caps and limits | | |
-| 8 shared helper into GraphLang | | |
+| 1 Docker spike, container optional | **Accept the analysis; solved the way the review suggests, without the host fallback.** Code goes in on stdin as JSON; the runner (`run_tests.py`, `integrate.py`) is baked into `appgraph-verify:py3.12`; `mount: none`, so `/tmp` fixtures and Docker Desktop work. Vue: `build/node_image.py` drives docker itself with one image per lockfile (`npm ci` at image build is the only network use; tests run `--network none`). The container stayed the default for both; there is no host path for tests | plan, "Result of Phase 3/4"; "Reconciling the Sonnet review" |
+| 2 GUARD as attestation | **Accept.** `write_ok` was already computed by a step before the guard; the record now says plainly that the policy attests, it does not confine. Added real confinement where it was missing: `files.inside()` refuses a node file or acceptance test whose path leaves the output folder (a blueprint or model could name `../x`) | decision 5's record; `build/files.py`; `tests/test_build_lib.py` |
+| 3 `python3` token / `sys.executable` | **Accept, done locally.** `run.own_python()` puts this interpreter's folder first on PATH for the run (rewriting commands would miss parts, which the runtime loads itself). Upstream item: GraphLang resolving `python3` itself | `run.py`; upstream list |
+| 4 LOOP wiring note | **Accept; already so.** Loops count to `"@in_n"` with a named `index:` and read the item with `json_get`; `build_component` runs as a part inside `build_app`'s LOOP (tested on the todo app). Also learnt: `$loop.X` must be read as `X`, and a part's input can't come straight from `$loop` | CLAUDE.md (GraphLang rules) |
+| 5 prompt substitution order | **Accept; confirmed by a probe** (a value substituted early is rescanned by every later placeholder). Every GENERATE now lists identifiers first and model- or user-written text last. spl3 replaced sequentially too, so rendered prompts are unchanged. A full fix is single-pass substitution in GraphLang (upstream) | the recipes; upstream list |
+| 6 server stop on every path | **Accept the concern; resolved by design.** The backend runs *inside* the integration container and dies with it, on every path (tested: `integration_failed` ends cleanly). Not tested: a host process killed while that container runs (GraphLang's container runner is responsible for removing it) | plan, "Result of Phase 4" |
+| 7 caps and limits | **Accept; already so.** `builder.py` derives the call cap from nodes and attempts (4 per node + attempts + 2) and `max_steps` from the node count; loop bounds are inputs. `graf validate` still prints "at least" because the bounds are expressions | `builder.py` |
+| 8 shared helper into GraphLang | **Agree in principle; not done here.** It is a GraphLang change, and work-graph is being refactored in another session; doing it from here would edit both. Proposed upstream together with items 3 and 5, GENERATE `max_tokens`, and setting an adapter's timeout (now reached through `inner._adapters`) | plan, "Upstream items for GraphLang" |
