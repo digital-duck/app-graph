@@ -17,8 +17,8 @@ import urllib.request
 def request(method, path, body=None):
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(
-        f"{BASE}{path}", data=data, method=method,
-        headers={"Content-Type": "application/json"} if data else {},
+        f"{{BASE}}{{path}}", data=data, method=method,
+        headers={{"Content-Type": "application/json"}} if data else {{}},
     )
     try:
         with urllib.request.urlopen(req) as resp:
@@ -72,7 +72,7 @@ The script must:
    the API itself returned earlier (e.g. a tag/category/item fetched or
    created via a prior request in this same script), reuse that FULL object
    exactly as returned — do NOT construct a new partial object with only
-   some of its fields (e.g. `{"name": "x"}` when the real object also has a
+   some of its fields (e.g. `{{"name": "x"}}` when the real object also has a
    required `id`/`slug`). Building request bodies for update/PUT calls,
    include every field the corresponding GET response has, not just the
    ones you intend to change.
