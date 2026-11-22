@@ -3,11 +3,10 @@
 `appgraph` is the CLI for app-graph blueprint files (`*.graph.yaml`). It
 validates, extracts, builds, and inspects blueprint graphs — the `Unified
 Duality Graph Schema v2.1+` files that describe an app's structure before
-any code exists. Code generation itself (`extract --llm`, `build`, `drift
---llm`) is a thin wrapper: it shells out to `spl3` (package `spl-llm`,
-installed automatically as a `appgraph` dependency) to run the `.spl`
-workflows that actually call an LLM — `appgraph` itself has no LLM-calling
-code, it's the schema + algorithms library and the CLI around it.
+any code exists. The commands that call a model (`extract --llm`, `build`,
+`drift --llm`) run **GraphLang recipes** (`src/appgraph/recipes/`) through
+a dd-llm adapter; everything else is the schema + algorithms library and
+makes no model call.
 
 This guide covers every `appgraph` subcommand with real examples. For the
 schema itself (what goes *in* a `graph.yaml`), see
@@ -18,38 +17,40 @@ agent working in this repo, see the root `CLAUDE.md`.
 ## Install
 
 ```bash
-conda activate spl123
 pip install -e ".[dev]"   # from this repo's root (dev checkout)
-# or: pip install appgraph  (release install)
+# or: pip install app-graph  (release install)
 appgraph --help            # sanity check
 agr --help                 # same CLI, shorter name
 ```
 
 This installs two console scripts — `appgraph` and `agr` (both point at
-`appgraph.cli:main`) — and pulls in `spl-llm` (the `spl3` CLI) as a real
-dependency. Nothing further is needed for `extract --llm`/`build`/`drift
---llm` to work. `appgraph ide`'s Vue frontend is the one piece that needs a
-manual one-time `npm install` (see its section below) since `pip` can't
+`appgraph.cli:main`) — and pulls in `graflang` (the recipe runtime) and
+`dd-llm` (the model adapters). `appgraph ide`'s Vue frontend needs a
+manual one-time `npm install` (see its section below), since `pip` can't
 install npm packages.
+
+### Docker, for `build`
+
+`appgraph build` runs every component's tests in a container with no
+network. Python components use one image; build it once from a checkout:
+
+```bash
+docker build -t appgraph-verify:py3.12 -f src/appgraph/docker/python.Dockerfile src/appgraph/docker
+```
+
+Vue components use an image made from their own `package-lock.json`
+(`appgraph-verify-node:<hash>`, from `node:22`), built automatically the
+first time it's needed — so a Vue component's folder needs a lockfile
+(run `npm install` there once). Nothing from your disk is mounted into
+either container: the code goes in on stdin.
 
 ### Verify your environment
 
-After install, confirm all three tools resolve inside `spl123`:
-
 ```bash
-(spl123) $ which agr
-/home/papagame/anaconda3/envs/spl123/bin/agr
-
-(spl123) $ which spl3
-/home/papagame/anaconda3/envs/spl123/bin/spl3
-
-(spl123) $ which mg
-/home/papagame/.local/bin/mg
+appgraph --help
+graf --version                                   # the GraphLang CLI, if you want to validate/draw a recipe
+docker image inspect appgraph-verify:py3.12 >/dev/null && echo image-ok
 ```
-
-`agr` and `spl3` live in the `spl123` conda env.  `mg` (momagrid — hub/agent
-CLI) is a Go binary installed globally at `~/.local/bin` and is available in
-any environment.
 
 ### The `~/app-graph` workspace
 
@@ -131,7 +132,7 @@ Warnings (e.g. `UNREACHABLE_STEP`) print but don't fail the command;
 
 ### `appgraph order <graph.yaml>`
 
-Prints the topological build order — the same order `build_component.spl`
+Prints the topological build order — the same order the `build_component` recipe
 generates nodes in (mandatory-edge subgraph only; `enriched_by`/
 `optionally_depends_on` are ignored for ordering purposes).
 
@@ -203,7 +204,7 @@ appgraph extract \
   --backend-models-dir fief/models \
   --backend-services-dir fief/services \
   --backend-port 8010 --frontend-port 5180 \
-  --llm claude_cli:claude-sonnet-4-6 \
+  --llm claude_cli:claude-sonnet-5-5 \
   --llm-timeout 900
 ```
 
@@ -228,74 +229,70 @@ missing) if you don't pass it — so a repeat extraction never silently
 overwrites an existing app; pass an explicit path (e.g. this repo's own
 `apps/<app-name>`) to write elsewhere, as the example above does.
 
-**`--llm ADAPTER:MODEL`** (e.g. `claude_cli:claude-sonnet-4-6`) adds a
-semantic pass after the AST pass: classifies the app's shape (integrated /
-single-component / no fit) and calls `spl/compile_blueprint.spl` to draft
-*real* `spec.interface`/`spec.contract` content instead of `TODO:` stubs,
-tagging its output `provenance: reverse` in the `blueprint:` block. Still
-only structurally validated, not a claim of correctness — **review the
-output before building either way**. `--llm-timeout SECONDS` overrides the
-adapter's default per-call timeout (300s, or 600s with tool use) — bump this
-for a large repo or a slow model.
+**`--llm ADAPTER:MODEL`** (e.g. `claude_cli:claude-sonnet-5-5`) adds a
+semantic pass after the AST pass: the **`compile_blueprint`** recipe
+classifies the app's shape (integrated / single-component / no fit) and
+drafts *real* `spec.interface`/`spec.contract` content instead of `TODO:`
+stubs, tagging its output `provenance: reverse` in the `blueprint:` block.
 
-The semantic pass is **fail-fast by default** (`max_repair_attempts: 0` in
-`compile_blueprint.spl`): an invalid-YAML generation reports `FAILED`
-immediately instead of spending further LLM calls trying to self-repair —
-deliberate, while app-graph's own prompts are still being hardened, so a
-systematic generation bug surfaces on the first bad output rather than
-getting quietly retried away. For an INTEGRATED (backend+frontend+main)
-app, a failing component stops the whole pass immediately rather than
-continuing to generate the remaining components first.
+- **INTEGRATED** writes `blueprint/backend.graph.yaml`, `frontend.graph.yaml`
+  and `main.graph.yaml` (replacing the AST-only stubs).
+- **SINGLE** or **NO_FIT** writes one `blueprint/component.graph.yaml`;
+  review it and rename/merge by hand.
+- If no existing tech profile fits, it also writes `TECH_PROFILE_DRAFT.md`
+  — a draft for you to review, never merged into
+  `appgraph/build/tech_profiles.py` automatically.
+
+Each drafted blueprint is validated (YAML parses, no cycle, no id referenced
+but undeclared, settings resolve) and, while invalid, sent back to the model
+with the error for repair — up to **2** repairs per blueprint. One still
+invalid after that ends the pass with `FAILED: <the validation message>`; for
+an integrated app, the components after it are not drafted. "Valid" is
+structural only, not a claim of correctness — **review the output before
+building either way**.
+
+`--llm-timeout SECONDS` overrides the adapter's per-call timeout — bump it
+for a large repo or a slow model. `--max-llm-calls N` (default 20) stops the
+pass before N model calls; an integrated app with no repairs needs 5.
 
 #### Resumability
 
 `extract` can be interrupted (a large `--repo-url` clone, a long AST scan,
-or — most commonly — a `--llm` pass that dies to a session/agent timeout or
-a transient provider error like `ModelOverloaded`). Rerunning the exact same
-command resumes instead of restarting from scratch, at two granularities:
+or — most commonly — a `--llm` pass that dies to a session limit or a
+transient provider error). Rerunning the exact same command resumes instead
+of restarting from scratch, at two granularities:
 
 1. **Coarse** — `<output-dir>/.appgraph_cache/` persists the cloned repo
    (for `--repo-url`), the AST-extraction results, and a marker for a
    *fully-completed* `--llm` pass. A rerun with the same inputs skips
-   whichever stages already finished. Invalidates automatically if the
+   whichever stages already finished. It invalidates automatically if the
    source repo's scanned directories change (content signature, not just a
    flag).
-2. **Fine** — the `--llm` pass itself runs as a durable `spl3` workflow
-   (`--persistence sqlite` by default, both in `appgraph extract` and in
-   `spl3 run` itself), checkpointing every `GENERATE`/`CALL` step under a
-   `--workflow-id` derived from the run's own inputs. If the pass dies
-   partway through a repair loop (attempt 2 of 3, say), the rerun resumes
-   from the last checkpoint instead of re-paying for attempts already made.
+2. **Fine** — while the `--llm` pass runs, a GraphLang checkpoint
+   (`.appgraph_cache/llm-<key>.checkpoint.json`, the key a hash of the
+   model and the inputs) is written after every top-level step. If the pass
+   dies, the rerun resumes after the last finished step — the shape
+   classification and every blueprint already drafted are not paid for
+   again. A pass that died *inside* a repair loop restarts that loop. The
+   checkpoint is deleted when the pass finishes.
 
 ```bash
-appgraph extract ... --llm claude_cli:claude-sonnet-4-6   # crashes on attempt 2
+appgraph extract ... --llm claude_cli:claude-sonnet-5-5   # dies at the frontend draft
 
-appgraph extract ... --llm claude_cli:claude-sonnet-4-6   # same command — resumes
+appgraph extract ... --llm claude_cli:claude-sonnet-5-5   # same command — resumes there
 ```
 
 Pass **`--skip-cache`** to force a fresh run at both granularities (ignores
-`.appgraph_cache/`, re-clones/re-scans, runs the `--llm` pass fresh) — use
-this if you've since edited the source repo in a way the content signature
-might not catch, or just want a genuine from-scratch attempt. It still
-*writes* fresh cache/checkpoints as it goes — under the hood it mints a
-one-off `--workflow-id` rather than reusing the deterministic one derived
-from your inputs, specifically so it can't silently resume (and replay the
-LLM output of) an earlier completed run with these same inputs, which would
-defeat the point of asking for a fresh run. `--skip-cache` only skips
-*reading* stale content; a crash partway through a `--skip-cache` run is
-still resumable on retry, same as a normal run.
+`.appgraph_cache/`, re-clones/re-scans, deletes any old checkpoint and runs
+the `--llm` pass fresh). It still *writes* a fresh cache and checkpoint as
+it goes, so a crash partway through a `--skip-cache` run is resumable too.
 
-`--persistence {sqlite|postgres|dbos|none}` (default `sqlite`) picks the
-durability backend for the `--llm` pass alone, active even under
-`--skip-cache`; `sqlite` is zero-setup local durability
-(`~/.spl/workflows.db`), the other two are for production/cloud use.
+`--persistence {checkpoint|none}` (default `checkpoint`; `sqlite` is
+accepted as the old name) turns the checkpoint off with `none`.
 
 ### `appgraph build TARGET [--input-dir DIR] [--output-dir DIR] [--tech-profile NAME] [--llm ADAPTER[:MODEL]]`
 
-Generates code for an app or component from its blueprint — a thin wrapper
-that shells out to `spl3 run` the same way `extract --llm` does, just
-targeting `build_app.spl`/`build_component.spl` instead of
-`compile_blueprint.spl`.
+Generates and tests code for an app or component from its blueprint.
 
 ```bash
 appgraph build apps/todo/blueprint/main.graph.yaml
@@ -305,24 +302,41 @@ appgraph build inventory --input-dir apps          # resolve by app name instead
 `TARGET` is either a direct path to a `*.graph.yaml` file, or an app name
 resolved as `INPUT_DIR/<name>/blueprint/main.graph.yaml` (falling back to
 `component.graph.yaml` if there's no `main.graph.yaml`) — `--input-dir`
-defaults to `~/app-graph/input`. A target with an `imports:` block (a
-system graph) is built via `build_app.spl` — every imported component, then
-`integrate_system.spl`; a target with none is built directly via
-`build_component.spl`, with `--tech-profile` (default `python_fastapi`)
-naming its tech profile — ignored for a system target, where
-`build_app.spl` derives one per imported component automatically.
-`--output-dir` writes generated code somewhere other than next to each
-component's own `graph.yaml` (the default) — useful for a fresh generation
-you don't want to overwrite an existing build with, e.g. to inspect it
-separately from an existing build. (`appgraph compare` and the IDE's Compare
-page, which used to diff two such directories file-by-file, have been
-removed — use a regular file diff tool, e.g. VS Code's compare view, instead.)
+defaults to `~/app-graph/input`.
+
+- A target **without** `imports:` (one component) runs the
+  **`build_component`** recipe. For each node in build order, it writes
+  the node's code (or takes it from `<output>/.spl_cache/`), checks the node
+  and its edges, and refines it once if a check fails. Then it runs the
+  component's tests in Docker. On a failure, it repairs the node the failure
+  points at and runs the tests again, up to `--max-test-attempts` (default
+  3) test runs. `--tech-profile` overrides the graph's own `tech_profile:`.
+- A target **with** `imports:` (a system) runs the **`build_app`** recipe.
+  It builds every imported component as above, each with its own tech
+  profile, and stops at the first that fails. Then it writes one HTTP
+  acceptance test per application, runs them against the live backend in a
+  container, and writes the app's `README.md` with the real results.
+
+The build ends **passed**, **no_tests** (the code was written, but no tests
+were found), **failed**, **integration_failed**, **component_failed: NAME**
+or **refused**. Refused means the output folder is not under your home or
+the temporary folder, so the policy would not let it write.
+
+The build prints a summary and the path of its log. Every run is logged
+under `~/app-graph/logs/`.
+
+| Option | Effect |
+|---|---|
+| `--llm ADAPTER[:MODEL]` | the model for the run (default `claude_cli`) |
+| `--max-llm-calls N` | stops the build before N model calls (default: 4 per node + 1 per test attempt + 2) |
+| `--no-cache` | regenerates every node instead of reusing `.spl_cache/`. The cache is the same one graph-code wrote, so an app built by graph-code rebuilds here with no model calls. |
+| `--output-dir` | writes the code somewhere other than next to each component's `graph.yaml` (useful for a fresh generation beside an existing build) |
 
 ### `appgraph ide [--api-port PORT] [--dev-port PORT] [--no-frontend] [--apps-root DIR]`
 
 Launches **Graph IDE**: a browser viewer *and editor* for an app's
 blueprint graph. Shortcut for the two-terminal `uvicorn` + `npm run dev`
-dance in `tools/graph-ide/README.md` — starts the FastAPI backend
+dance in `src/appgraph/graph-ide/README.md` — starts the FastAPI backend
 (`:8880` default) and the Vite dev server (`:8881` default), and opens with
 Ctrl-C stopping both.
 
@@ -407,14 +421,13 @@ compared. Rather than the schema doc's original "embedding distance"
 repo otherwise has none of), it's scored by **LLM-as-judge**: the exact
 model named by `--llm` reads both graphs' intent text
 (`graph_lib.intent_drift()`, given a judge callable) and scores
-meaning-drift directly (`spl/compute_intent_drift.spl`, same
-`GENERATE`-based pattern `compile_blueprint.spl` uses to draft — this one
-judges instead). A faithful paraphrase should score near 0; a contradicted
+meaning-drift directly (`appgraph/judge.py`: one dd-llm call with
+`appgraph/prompts/intent_drift.md`, whose reply must be one number). A faithful paraphrase should score near 0; a contradicted
 or missing rationale should score near 1.
 
 ```bash
 appgraph drift apps/fief/blueprint/backend.graph.yaml apps/fief/blueprint/backend.graph.yaml \
-  --llm claude_cli:claude-sonnet-4-6 --llm-timeout 300
+  --llm claude_cli:claude-sonnet-5-5 --llm-timeout 300
 ```
 
 Use `--dims` to restrict the report to specific components — comma-separated,
@@ -427,7 +440,7 @@ without `intent` means no LLM call happens even if `--llm` is also passed.
 appgraph drift a.graph.yaml b.graph.yaml --dims structural,implementation
 
 # just intent, isolated from the graph-diff components
-appgraph drift a.graph.yaml b.graph.yaml --dims intent --llm claude_cli:claude-sonnet-4-6
+appgraph drift a.graph.yaml b.graph.yaml --dims intent --llm claude_cli:claude-sonnet-5-5
 ```
 
 Use this once a `reverse`-provenance blueprint exists to compare against an
@@ -446,23 +459,6 @@ alive. Handy after a `appgraph ide`/dev server that didn't exit cleanly.
 ```bash
 appgraph tools clean-port 8880 8881
 ```
-
-### `appgraph tools spl-lint [FILES...] [--fix]`
-
-Finds/fixes unescaped single quotes inside `.spl` `CREATE FUNCTION` prompt
-bodies (`AS $$ ... $$`) — SPL dollar-quoted strings use SQL-style quote
-escaping, so a literal apostrophe (`"don't"`, `"component's"`) must be
-written as `''` or it breaks parsing for everything after it in the file.
-
-```bash
-appgraph tools spl-lint            # spl/*.spl by default
-appgraph tools spl-lint --fix      # auto-correct
-```
-
-Scope is deliberately narrow: only plain `AS $$ ... $$` blocks (LLM prompt
-prose) are auto-fixed. `AS PYTHON $$ ... $$` blocks (`CREATE TOOL_API`
-bodies, real executable Python where a quote is a string delimiter, not an
-English apostrophe) are reported but never auto-fixed — check those by eye.
 
 ---
 
@@ -519,14 +515,16 @@ after a batch of manual edits, before committing.
   scripts on `PATH` (check `pip show -f app-graph | grep Location`), or
   you're in a different environment than the one you installed into. In a
   repo checkout doing dev work, make sure it was `pip install -e ".[dev]"`.
-- **`extract --llm`/`build` fails with `semantic pass failed (exit ...)`/
-  `build failed (exit ...)`** — usually a wrong adapter/model string, or an
-  actual generation failure (`compile_blueprint.spl` is fail-fast by
-  default — see the `extract` section above). Rerunning the same command
-  resumes rather than restarting once the underlying issue is fixed — see
-  Resumability above. If it's `spl3: command not found` instead, the
-  `spl-llm` dependency didn't install correctly — `pip show spl-llm` to
-  check.
+- **`extract --llm` stops with `semantic pass stopped: ...`** — a wrong
+  adapter/model string, a provider error, or the `--max-llm-calls` cap.
+  Fix the cause and rerun the same command: it resumes from the checkpoint
+  (see Resumability). `semantic pass did not produce a valid blueprint:
+  FAILED: ...` means a draft was still invalid after its repairs; the
+  message is the validator's.
+- **`build` ends `failed`** — the summary names the tests that failed and
+  the log has every prompt and reply. **`refused`** — choose an output
+  folder under your home. **`needs Docker`/image errors** — build the
+  `appgraph-verify:py3.12` image (see Install).
 - **A specific app doesn't show up in `appgraph ide`'s dropdown** — it
   needs at least one `*.graph.yaml` directly under
   `<app>/blueprint/` under whatever `--apps-root` is in effect (default

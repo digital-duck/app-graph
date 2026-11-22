@@ -1,5 +1,8 @@
 # graph-code apps — migration plan and index
 
+> **Note (app-graph 0.2.0):** this page was carried over from graph-code. The build history below was recorded with graph-code's `spl3` pipeline, and the commands it quotes (`spl3 run spl/...`, `grafcode ...`) are kept as they were run. To build today, run `appgraph build apps/<app>/blueprint/main.graph.yaml`, which uses the GraphLang recipes (see `docs/GUIDE/User-Guide.md`). The per-node `.spl_cache/` from those runs is still read.
+
+
 Tracks every app under this directory: its status, its blueprint's shape, and — for apps
 migrated from `graph-driven-workflow/apps/SPL/` — what's left to do. Every `.graph.yaml` file
 lives under `apps/<app>/blueprint/` (mandatory convention since 2026-08-13, see
@@ -42,15 +45,12 @@ purpose-built app rather than expecting it to fall out of this migration list.
 `apps/<app>/blueprint/{main,backend[,frontend]}.graph.yaml` in the current schema (`form.nodes`
 with `kind`/`defines`/`composed_of`/`tier`/`spec.interface`/`spec.contract`, `blueprint:`
 provenance block, `tech_profile`/`port` orchestration fields), validate with zero LLM cost
-(`graph_code.load_domain()` + `validate_full()`), seed pre-authored test fixtures
+(`appgraph.load_domain()` + `validate_full()`), seed pre-authored test fixtures
 (`tests/`, and for `vue_typescript` frontends also `package.json`/etc + `npm install`) into the
 default output location, then run 
 
 ```bash
-spl3 run spl/build_app.spl \
-    --tools spl/tools.py \
-    -p system_yaml=apps/<app>/blueprint/main.graph.yaml \
-    --llm claude_cli
+appgraph build apps/<app>/blueprint/main.graph.yaml --llm claude_cli
 ``` 
 for real and iterate on whatever the run surfaces — every app so far has needed at least one real bug found-and-fixed
 this way, never zero.

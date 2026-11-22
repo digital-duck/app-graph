@@ -1,5 +1,8 @@
 # Candidate apps for Path-B ingestion
 
+> **Note (app-graph 0.2.0):** this page was carried over from graph-code. The build history below was recorded with graph-code's `spl3` pipeline, and the commands it quotes (`spl3 run spl/...`, `grafcode ...`) are kept as they were run. To build today, run `appgraph build apps/<app>/blueprint/main.graph.yaml`, which uses the GraphLang recipes (see `docs/GUIDE/User-Guide.md`). The per-node `.spl_cache/` from those runs is still read.
+
+
 Currently ingested (`apps/SPL/*`): todo, expense, fastapi, fullstack, kanban,
 dispatch, conduit, mealie — all FastAPI + SQLAlchemy + Vue/Vite, CRUD-shaped.
 The picks below were chosen to force *new* graph patterns rather than repeat

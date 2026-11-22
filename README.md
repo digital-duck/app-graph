@@ -1,192 +1,181 @@
 # app-graph
 
-> **app-graph** continues [graph-code](https://github.com/digital-duck/graph-code) (`grafcode` 0.1.1, left as it was) and is being moved onto
-> [GraphLang](https://github.com/digital-duck/graflang): the LLM build workflows become GraphLang recipes, the blueprint schema and the
-> library stay. Plan and progress: `docs/DEV/graflang-refactor.md`. Until that is done, parts of this README still describe the `spl3` pipeline.
+Graph-driven code generation. You describe an app (or a curriculum) as a
+`graph.yaml` **blueprint**, a graph of typed nodes and edges in the
+*Unified Duality Graph Schema v2.1+*. app-graph checks the blueprint and
+builds real, tested code from it with an LLM. The graph comes first and is
+the source of the implementation; it is not a diagram drawn from code that
+already exists.
 
-Graph-driven code and curriculum generation — the **Unified Duality Graph
-Schema v2.1+**, a `graph.yaml` format that represents an app (or a
-curriculum) as a graph of typed nodes and edges, plus a small pure-Python
-library and CLI for validating, inspecting, and scaffolding those graphs.
+app-graph continues [graph-code](https://github.com/digital-duck/graph-code)
+(`grafcode` 0.1.1, which stays as it was). The difference is the engine:
 
-An LLM-driven build pipeline (in the sibling `SPL.py` repo) reads a
-`graph.yaml` and generates real, tested application code from it — the graph
-is upstream of the implementation, a blueprint rather than a diagram of code
-that already exists. This repo owns the schema, the graph algorithms, and
-the tooling around them; it does not itself call an LLM or generate code.
+- In graph-code, the LLM workflows were `.spl` scripts run by `spl3`.
+- In app-graph they are **[GraphLang](https://github.com/digital-duck/graflang)
+  recipes**. A recipe is a graph you can validate, draw, cap, checkpoint
+  and log. Model calls go through `dd-llm`. Tests run in Docker.
+
+The blueprint schema, the graph library and the CLI are unchanged. The
+migration is recorded in `docs/DEV/graflang-refactor.md`.
 
 ## Quick start
 
 ```bash
-pip install appgraph   # or: pip install -e ".[dev]" from a repo checkout
+pip install app-graph            # or: pip install -e ".[dev]" from a checkout
 
-appgraph --help
-appgraph validate apps/todo/blueprint/backend.graph.yaml    # single component
-appgraph validate apps/todo/blueprint/main.graph.yaml       # system + every import
-appgraph ide --apps-root apps   # browse every app's graph in the browser
+appgraph validate apps/todo/blueprint/main.graph.yaml      # the system and every import
+appgraph build apps/jwt_provider/blueprint/component.graph.yaml --max-llm-calls 12
+appgraph ide --apps-root apps                               # browse every app's graph
 ```
 
-`pip install appgraph` pulls in `spl-llm` (the `spl3` CLI) automatically,
-so `extract --llm`/`build`/`drift --llm` work right after install — no
-separate clone of the sibling `SPL.py` repo needed. `appgraph ide`'s Vue
-frontend is the one piece that still needs a manual one-time `npm install`
-(see its section in the User Guide), since `pip` can't install npm
-packages. Commands that write files default into `~/app-graph/{input,
-output, report, ide}` rather than into this repo's own `apps/` — pass
-`--output-dir`/`--input-dir`/`--out`/`--apps-root` explicitly to use this
-repo's `apps/` instead, as above.
+`agr` is a short alias for `appgraph`.
 
-See **`docs/GUIDE/User-Guide.md`** for the full `appgraph` command reference
-and worked examples, and `CLAUDE.md` for the condensed command table and
-architecture notes aimed at an AI coding agent working in this repo.
+`build`, `extract --llm` and `drift --llm` call a model through a dd-llm
+adapter (`--llm ADAPTER[:MODEL]`, default `claude_cli`). Building also needs
+**Docker**:
+
+- Python components are tested in the `appgraph-verify:py3.12` image. Build it once:
+
+  ```bash
+  docker build -t appgraph-verify:py3.12 -f src/appgraph/docker/python.Dockerfile src/appgraph/docker
+  ```
+
+- Vue components are tested in an image made from their lockfile. It is built automatically the first time.
+
+The test containers have no network access.
+
+Commands that write files default to folders under `~/app-graph/`:
+`input`, `output`, `report`, `ide` and `logs`. Pass
+`--output-dir`, `--input-dir`, `--out` or `--apps-root` to write somewhere
+else.
+
+The full command reference is in **`docs/GUIDE/User-Guide.md`**. The
+condensed version for AI coding agents is in `CLAUDE.md`.
 
 ## What's in a `graph.yaml`
 
-Every parsed graph produces a `GraphDomain` with two graphs:
+Every parsed graph becomes a `GraphDomain` that holds two graphs:
 
 | Graph | Structure | Direction | May cycle? |
 |---|---|---|---|
-| `form_graph` | Primitives + `form.nodes` — the *what*: components, docs, steps | `dep → node` (prerequisite → dependent) | No — always a DAG |
-| `event_graph` | Bipartite nodes/events — the *reactive* behavior | `node → event`, `event → node` | Yes |
+| `form_graph` | Primitives and `form.nodes`: the *what* (components, docs, steps) | `dep → node` (prerequisite → dependent) | No, always a DAG |
+| `event_graph` | Bipartite graph of nodes and events: the *reactive* behaviour | `node → event`, `event → node` | Yes |
 
-A node's `spec.interface`/`spec.contract`/`verification` fields are what a
-build pipeline reads to generate and test that node's code; `composed_of`/
-`depends_on` edges are mandatory structure, `enriched_by`/
-`optionally_depends_on` are optional, and `needs` expresses an
-application-level (not structural) dependency. Five `domain_type` profiles
-share this one schema: `curriculum`, `software`, `reactive_app`,
-`integrated` (a graph of graphs — `main.graph.yaml` importing component
-graphs), and `workflow` (action-routed, cycle-permitting `function.transitions`
-for PocketFlow-style step dispatch).
+The fields of a node have these roles:
 
-A `blueprint:` metadata block (schema v2.2, additive) tracks a graph's own
-provenance — `authored | build | reverse | roundtrip` — plus an append-only
-`lineage:` log of every LLM pass that touched it. See
-`docs/DEV/BUILD/blueprint-schema-v2.2.md` for the full schema and the
-"Status" section below for what's actually implemented today.
+- `spec.interface`, `spec.contract` and `verification` are what a build reads to generate and test that node.
+- `composed_of` and `depends_on` are mandatory edges; `enriched_by` and `optionally_depends_on` are optional ones.
+- `needs` states an application-level dependency.
+
+There are five `domain_type` profiles:
+
+| Profile | Meaning |
+|---|---|
+| `curriculum` | a course or curriculum |
+| `software` | one software component |
+| `reactive_app` | event-driven |
+| `integrated` | a graph of graphs: `main.graph.yaml` imports the component graphs |
+| `workflow` | action-routed `function.transitions`, cycles allowed |
+
+A `blueprint:` block (schema v2.2) records the graph's provenance
+(`authored | build | reverse | roundtrip`) and a `lineage:` log of each LLM
+pass. The schema is in `docs/DEV/BUILD/blueprint-schema-v2.2.md`.
+
+## How a build runs
+
+`appgraph build` runs one of the three recipes in `src/appgraph/recipes/`:
+
+| Recipe | Used by | What it does |
+|---|---|---|
+| `build_component` | `build` on a component | For each node in build order: write its code, cache it, check the node and its edges, refine it once if needed. Then run the component's tests, and repair the node the failure points at, up to `--max-test-attempts` times. |
+| `build_app` | `build` on a system (a graph with `imports:`) | Uses `build_component` once per component. Then writes an acceptance test per application, runs them against the live backend in a container, and writes the README. Stops at the first component that fails. |
+| `compile_blueprint` | `extract --llm` | Classifies the repo's shape, then drafts one blueprint or three (backend, frontend, main). Each draft is validated and repaired, then written. If no tech profile fits, it also writes a `TECH_PROFILE_DRAFT.md` for you to review. |
+
+All three follow the same rules:
+
+- Each prompt is a file under the recipe's `prompts/`.
+- Every step that writes files passes a Cedar policy first (`policies/*.cedar`). Writes are allowed only under your home folder or the temporary folder.
+- Every run has a cap on model calls.
+- Each run writes a log under `~/app-graph/logs/`.
+
+Generated code is cached per node in `<output>/.spl_cache/`. That cache can
+be read by both graph-code and app-graph. `extract --llm` keeps a checkpoint,
+so a pass that died partway resumes where it stopped.
+
+The deterministic work happens outside the recipes, in `appgraph.build`:
+reading the blueprint, caching, writing, verifying and running tests. These
+are plain Python functions. A recipe calls them as
+`python -m appgraph.build.tool STEP`.
 
 ## Repository layout
 
 ```
 app-graph/
-  src/appgraph/     the library + CLI + packaged assets (all shipped in the wheel)
-    loader.py            GraphDomain dataclass + load_domain() — parses v1.0 flat and v2.1+ YAML
-    graph_lib.py          14 pure functions over a GraphDomain (validate_full, build_order, ...)
-    exceptions.py        ToolFailed (hard validation failure) / ValidationWarning (soft)
-    settings.py           ${{ settings.KEY }} interpolation from an app-scoped settings.yaml
-    _extract.py            AST/regex analysis + draft-blueprint generation behind `appgraph extract`
-    cli.py                  the `appgraph` console script (click group)
-    spl/                    the forward-build .spl workflows (build_component/build_app/integrate_system)
-    graph-ide/               browser viewer+editor for blueprint graphs (FastAPI + vanilla-JS SVG renderer)
-  spl -> src/appgraph/spl                    repo-root symlink (dev convenience, e.g. `spl3 run spl/...`)
-  tools/graph-ide -> ../src/appgraph/graph-ide   repo-root symlink (dev convenience)
-  apps/               every app's blueprint (apps/<app>/blueprint/*.graph.yaml) + generated code
-  tests/              pytest suite — fixtures in conftest.py, real apps/ files exercised too
-  docs/
-    GUIDE/User-Guide.md          appgraph command reference (this doc's companion)
-    DEV/BUILD/                    build-plan history, schema spec, refactor notes, per-app logs
-    DEV/PAPER/                    literature review / related-work notes for the TMLR submission
+  src/appgraph/
+    loader.py         GraphDomain + load_domain() (v1.0 flat and v2.1+ YAML)
+    graph_lib.py      pure functions over a GraphDomain (validate_full, build_order, drift, clusters, ...)
+    exceptions.py     ToolFailed (hard failure, before any LLM call) / ValidationWarning
+    settings.py       ${{ settings.KEY }} interpolation from an app's settings.yaml
+    _extract.py       the AST/regex pass of `appgraph extract`
+    cli.py            the `appgraph` / `agr` console script
+    run.py            run_recipe(): a recipe on the GraphLang runtime, with a model, a call cap, logs, checkpoints
+    builder.py        build_component() / build_app(): what `appgraph build` calls
+    judge.py          the intent-drift judge (one dd-llm call)
+    build/            the deterministic build steps (blueprint, cache, files, verify, tech_profiles, ...)
+    recipes/          build_component/, build_app/, compile_blueprint/ (graph, prompts, policies, errors)
+    prompts/          intent_drift.md
+    docker/           the Python test image and its in-container runners
+    graph-ide/        browser viewer and editor for blueprints (FastAPI + SVG)
+  apps/               blueprints (apps/<app>/blueprint/*.graph.yaml), one example per domain_type
+  tests/              pytest suite (Docker tests are skipped when Docker is absent)
+  docs/GUIDE/User-Guide.md      command reference
+  docs/DEV/                     plans, schema, the GraphLang refactor
 ```
-
-`spl/` and `tools/graph-ide/` are canonically `src/appgraph/spl/` and
-`src/appgraph/graph-ide/` — package data shipped inside the `appgraph`
-wheel (`pyproject.toml`'s `[tool.setuptools.package-data]`) so `appgraph
-extract --llm`/`build`/`ide` work after a plain `pip install appgraph`,
-not just from a git checkout. The repo-root `spl/`/`tools/graph-ide`
-symlinks exist purely so every doc/script that types `spl/build_app.spl` or
-`tools/graph-ide` from the repo root keeps working unchanged. The `spl3`
-CLI and LLM adapters themselves live in the sibling `SPL.py` repo
-(published as `spl-llm`, a real `app-graph` dependency) — this repo has no
-LLM-calling code of its own, `appgraph extract --llm`/`build`/`drift --llm`
-shell out to `spl3 run`.
 
 ## The `appgraph` CLI
 
-Installed as a console script by `pip install appgraph` (or `pip install
--e ".[dev]"` from a checkout). Full reference, options, and examples:
-`docs/GUIDE/User-Guide.md`.
-
 | Command | Purpose |
 |---|---|
-| `appgraph validate <graph.yaml>` | `validate_full()` a component graph, or the whole system (every import + call contracts) if it has `imports:` |
+| `appgraph validate <graph.yaml>` | `validate_full()` a component, or the whole system (every import + call contracts) if it has `imports:` |
+| `appgraph validate-all <dir>` | Validate every `graph.yaml` under a folder |
 | `appgraph order <graph.yaml>` | Print `build_order()` |
 | `appgraph report <graph.yaml> [--out FILE]` | Node/edge/import counts |
 | `appgraph prettify <path> [--write]` | Normalize prose scalars to `\|` block literals |
+| `appgraph diagram ...` | Inspect and add diagram hints |
 | `appgraph new-app <name> <backend_port> <frontend_port>` | Scaffold a new `apps/<name>/blueprint/` |
-| `appgraph extract --repo-path/--repo-url ... [--output-dir ...] --app-name ...` | Analyze an existing repo and draft blueprint artifacts, with `--llm` for a semantic pass. Resumable — see the User Guide's caching section |
-| `appgraph build TARGET [--input-dir ...] [--output-dir ...]` | Generate code for an app/component from its blueprint |
-| `appgraph compare <dir_a> <dir_b> [--out FILE]` | Diff two build outputs of the same component |
-| `appgraph ide [--apps-root ...]` | Launch Graph IDE (browser viewer/editor) |
-| `appgraph drift <graph_a.graph.yaml> <graph_b.graph.yaml> [--dims ...] [--out FILE]` | Compute the drift report (5 components + overall) between two blueprints — `--llm` adds the `intent` component, `--dims` restricts which run |
-| `appgraph tools clean-port <port> [port ...]` | Kill whatever's listening on the given port(s) |
-| `appgraph tools spl-lint [FILES...] [--fix]` | Find/fix unescaped quotes in `.spl` prompt bodies |
-
-## Apps
-
-`apps/` holds one directory per app, each with an `apps/<app>/blueprint/`
-containing its `*.graph.yaml` source and (once built) sibling generated-code
-directories. Full status/history per app: `apps/README.md` and
-`docs/DEV/BUILD/README-TODO.md`. One file per `domain_type` in
-`apps/*.graph.yaml` demonstrates each schema profile
-(`classical_mechanics.graph.yaml` — curriculum, `auth_middleware.graph.yaml`
-— software, `physics_simulator.graph.yaml` — reactive_app,
-`physics_app.graph.yaml` — integrated, `etl_workflow.graph.yaml` — workflow).
-
-Currently ported/authored: `classical_mechanics`, `conduit`, `dispatch`,
-`etl_workflow`, `expense`, `fastapi`, `fullstack`, `jwt_provider`, `kanban`,
-`mealie`, `physics_app`, `todo` — plus `fief`, extracted from an external
-repo via `appgraph extract --llm` and still under review (its blueprint has
-`TODO:` markers and hasn't been fully authored/validated yet — see
-`apps/README-new-apps.md`).
+| `appgraph extract --repo-path/--repo-url ... --app-name ... [--llm ...]` | Draft blueprints from an existing repo; `--llm` adds the semantic pass (`compile_blueprint`) |
+| `appgraph build TARGET [--llm ...] [--max-llm-calls N]` | Generate and test code for a component or a whole app |
+| `appgraph drift <graph_a> <graph_b> [--dims ...] [--llm ...]` | The 5-component drift report; `--llm` adds `intent` |
+| `appgraph ide [--apps-root ...]` | Launch Graph IDE |
+| `appgraph tools clean-port / scaffold-fastapi / scaffold-vue / suggest-graph-clusters` | Small utilities |
 
 ## Testing
 
 ```bash
-pytest                                              # full suite
-pytest tests/test_graph_lib.py::TestAcyclic -v      # one class
-pytest -k "contract" -v                             # by keyword
+pytest                      # the full suite (about 2 minutes with Docker)
+pytest -k "contract" -v     # by keyword
 ```
 
-`tests/conftest.py` defines inline-YAML fixtures for isolated unit tests,
-plus a `TestExampleFiles`/`TestLoader` class that loads the real files under
-`apps/`. Any `graph.yaml` committed under `apps/` is expected to load and
-carry a non-empty `graph_id` — an in-progress extraction like `fief`'s can
-transiently fail this until its blueprint is finished being authored.
+The recipe tests use a scripted model, so they make no real LLM calls.
+They check the recipes against graph-code's own output. For example, the
+todo backend comes out byte for byte the same, in 7 model calls, and in 0
+calls when the cache has it.
 
 ## Status
 
-**Forward pass** (blueprint → generated, tested code) is real and working —
-`spl3 run spl/build_app.spl` builds a full app from its blueprint via an LLM
-adapter, with disk-backed per-node caching. See `docs/DEV/BUILD/README.md`
-for verified results across the apps above.
+The **forward pass** (blueprint → tested code) works for components and
+for integrated apps. See `docs/DEV/BUILD/README.md` for the results per app.
 
-**Reverse pass** (artifact → blueprint extraction) exists informally via
-`appgraph extract --llm` (`spl/compile_blueprint.spl`, which tags its output
-`provenance: reverse`) — not yet the systematic, corpus-scale miner
-envisioned in `docs/DEV/BUILD/README-TODO.md` §3, but real `reverse`-
-provenance blueprints (e.g. `fief`, extracted 2026-08-15) now exist to
-measure against.
+The **reverse pass** (repo → blueprint) is `appgraph extract --llm`, and its
+output is tagged `provenance: reverse`. `fief` is a real example.
 
-**Drift** (§3 of `docs/DEV/BUILD/blueprint-schema-v2.2.md`) — `appgraph
-drift <graph_a> <graph_b>` reports the 5-component drift vector plus an
-`overall` aggregate, one pure function per component in `graph_lib.py`
-(`structural_drift`/`interface_drift`/`intent_drift`/`behavior_drift`/
-`implementation_drift`, combined by `drift_report()`), each partitioning a
-distinct aspect of the schema. 4 components are free — pure graph-diffs
-over two `GraphDomain`s, matched by node id. The 5th, `intent`
-(`intent_drift()`, over `graph_lib.intent_text()` — each node's
-`defines`/`comment`/`spec.user_story` **and** its `docs` field, since a
-README-style description is exactly how a human expresses intent), needs
-`--llm ADAPTER:MODEL`: rather than the schema doc's original "embedding
-distance" (which would need a separate, hardcoded embeddings-API
-dependency this repo otherwise has none of), it's computed by LLM-as-judge
-— the same model named by `--llm` scores meaning drift directly
-(`spl/compute_intent_drift.spl`), mirroring how `compile_blueprint.spl`
-already uses `GENERATE` to draft rather than judge. `--dims
-dim1,dim2,...` restricts the report to specific components, skipping
-computation (and the LLM call) for the rest. Report-only for now — nothing
-writes the result back into a blueprint's own `blueprint.drift` block yet.
+**Drift** (`appgraph drift`) reports five components:
+
+- `structural`, `interface`, `behavior` and `implementation` are graph diffs matched by node id.
+- `intent` is judged by the model given with `--llm`.
+
+The report is printed only; nothing is written back to a blueprint.
 
 ## License
 
-Apache License 2.0 — see `LICENSE`.
+Apache License 2.0. See `LICENSE`.

@@ -197,6 +197,14 @@ outputs:  manifest, test_summary
 - Version: app-graph starts at **0.2.0** (continuing grafcode's line) or **0.1.0** as a new project (decision 1). CHANGELOG: new name, GraphLang/dd-llm instead of spl-llm, `--llm` unchanged, logs moved, what `build` now reports.
 - README and `CLAUDE.md` rewritten for the new layout; `docs/GUIDE/User-Guide.md` updated per command.
 
+**Result of Phase 7** (2026-11-22, docs; version stays 0.2.0, unreleased):
+
+- `README.md`, `CLAUDE.md` and `docs/GUIDE/User-Guide.md` are rewritten for the recipes. They cover install with Docker, what each recipe does, `build`'s outcomes and options, `extract --llm`'s checkpoint, and the GraphLang rules that bit during the port (in CLAUDE.md). `spl-lint`, `compare` and the `tools/`/`spl` symlinks are gone from the docs.
+- `apps/README.md` and `apps/README-new-apps.md` are history of graph-code runs. Each now starts with a note, and their spl3 commands are kept as they were run. The one how-to block now says `appgraph build`.
+- Correction found while documenting: graph-code's docs said `extract --llm` was fail-fast with `max_repair_attempts: 0`, but its `.spl` default was 2 and the CLI never overrode it. app-graph keeps 2 and the docs now say so.
+- Removed `APPGRAPH_WRITE_ROOTS`: the error catalogues suggested it, but a recipe's SOLVE step never receives that variable, so it could not work.
+- **Phase 6 is not done.** It covers the `expand:` form, `graf vis` pictures, IDE progress and prompt work. All of it is optional and left for a decision.
+
 ## 5. What does not change
 
 The blueprint schema (v2.1/v2.2) and every blueprint file; `validate`, `order`, `report`, `prettify`, `new-app`, `validate-all`, `diagram`, `drift` (without `--llm`), `ide`, `tools clean-port`/`scaffold-*`/`suggest-graph-clusters` behave as today under the new command name; the generated code layout (`NODE_FILES`, `{output_dir}/{component}`); the `.spl_cache` key (so a cache from graph-code can be reused: verify); the default work folders (`~/graph-code/{input,output,report,ide}` → renamed with the package, decision 1).
