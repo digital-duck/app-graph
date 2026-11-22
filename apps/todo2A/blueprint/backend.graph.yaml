@@ -1,0 +1,558 @@
+tech_profile: python_fastapi
+port: ${{ settings.BACKEND_FASTAPI_PORT }}
+graph: todo_backend
+version: "2.1"
+domain_type: software
+domain: software/backend/fastapi
+description: |
+  Async FastAPI backend for a personal todo application. Supports JWT-based
+  authentication, user registration, and per-user task management with
+  date-scoped listing and drag-and-drop priority reordering.
+capstone: main_app
+
+blueprint:
+  id: todo_backend
+  schema_version: "2.2"
+  domain_type: software
+  provenance: reverse-engineered
+  parent_blueprint: null
+  lineage: []
+
+form:
+  primitives:
+    python:
+      defines: "Python 3.11+ runtime and standard library"
+      tier: 0
+      kind: config
+    fastapi:
+      defines: "FastAPI web framework with async support"
+      tier: 0
+      kind: config
+    sqlalchemy:
+      defines: "SQLAlchemy 2.x async ORM"
+      tier: 0
+      kind: config
+    pydantic:
+      defines: "Pydantic v2 data validation library"
+      tier: 0
+      kind: config
+    pyjwt:
+      defines: "PyJWT library for JWT encoding/decoding"
+      tier: 0
+      kind: config
+
+  nodes:
+    config:
+      kind: module
+      defines: "Application settings loaded from environment variables"
+      composed_of: [python]
+      tier: 1
+      spec:
+        interface: |
+          class Settings(BaseSettings):
+              DATABASE_URL: str
+              JWT_SECRET_KEY: str
+              JWT_REFRESH_SECRET_KEY: str
+              ENCRYPTION_ALGORITHM: str = "HS256"
+              ACCESS_TOKEN_EXPIRE_MINUTES: int
+              REFRESH_TOKEN_EXPIRE_MINUTES: int
+              NEW_ACCESS_TOKEN_EXPIRE_MINUTES: int
+              NEW_REFRESH_TOKEN_EXPIRE_MINUTES: int
+
+          settings: Settings  # module-level singleton
+        contract: |
+          All values are read from environment at startup. Missing required
+          values raise a validation error before the server accepts connections.
+      verification:
+        node: |
+          - settings object is instantiated without error when required env vars are set
+          - accessing settings.DATABASE_URL returns the injected value
+      docs: |
+        - Uses pydantic-settings BaseSettings for automatic env-var loading
+        - Imported as `from backend.config import settings` throughout the app
+
+    database:
+      kind: module
+      defines: "Async SQLAlchemy engine, session factory, and FastAPI dependency"
+      composed_of: [sqlalchemy, config]
+      tier: 1
+      spec:
+        interface: |
+          engine: AsyncEngine
+          async_session_factory: async_sessionmaker[AsyncSession]
+          async get_async_session() -> AsyncGenerator[AsyncSession, None]
+        contract: |
+          get_async_session is a FastAPI dependency that yields one AsyncSession
+          per request and commits/rolls back on exit. Engine is created once at
+          module import using settings.DATABASE_URL.
+      verification:
+        node: |
+          - get_async_session yields an AsyncSession
+          - session is closed after the generator is exhausted
+      docs: |
+        - create_async_engine with pool_pre_ping=True
+        - Used as Depends(get_async_session) in all router handlers
+
+    models:
+      kind: module
+      defines: "SQLAlchemy ORM models: BaseModel, User, Task"
+      composed_of: [sqlalchemy, python]
+      tier: 1
+      spec:
+        interface: |
+          class BaseModel(DeclarativeBase):
+              created_at: Mapped[datetime]   # server default now()
+              updated_at: Mapped[datetime]   # server default now(), onupdate now()
+              is_deleted: Mapped[bool]       # default False
+              def to_dict(self) -> dict
+
+          class User(BaseModel):
+              __tablename__ = "user"
+              id: Mapped[int]               # PK autoincrement
+              guid: Mapped[uuid.UUID]       # unique, default uuid4
+              password: Mapped[str]         # hashed, max 128
+              username: Mapped[str]         # unique, max 150
+              name: Mapped[str]             # default ""
+              email: Mapped[str]            # unique, max 254
+              last_login: Mapped[datetime]  # nullable
+              tasks: Mapped[list[Task]]     # relationship back_populates="user"
+
+          class Task(BaseModel):
+              __tablename__ = "task"
+              id: Mapped[int]               # PK autoincrement
+              guid: Mapped[uuid.UUID]       # unique, default uuid4
+              priority: Mapped[int]
+              text: Mapped[str]
+              completed: Mapped[bool]       # default False
+              posted_at: Mapped[date]
+              user_id: Mapped[int]          # FK user.id
+              user: Mapped[User]            # relationship back_populates="tasks"
+        contract: |
+          BaseModel is abstract (__abstract__ = True). User.tasks and Task.user
+          form a bidirectional one-to-many relationship. All tables share the
+          same MetaData instance for Alembic migrations.
+      verification:
+        node: |
+          - User and Task can be instantiated and added to a session
+          - to_dict() returns all column values as a plain dict
+          - unique constraints on User.username, User.email, User.guid
+      docs: |
+        - Soft-delete pattern via is_deleted flag (not enforced at ORM level here)
+
+    schemas:
+      kind: module
+      defines: "Pydantic request/response schemas for tasks and users"
+      composed_of: [pydantic, python]
+      tier: 1
+      spec:
+        interface: |
+          class RefreshTokenSchema(BaseModel):
+              refresh_token: str
+
+          class CreateTaskSchema(BaseModel):
+              text: str
+              priority: int
+              posted_at: date
+
+          class UpdateTaskSchema(BaseModel):
+              priority: int | None = None
+              text: str | None = None
+              completed: bool | None = None
+
+          class UpdateTaskPrioritiesSchema(BaseModel):
+              priorities: dict[int, int]   # {task_id: new_priority}
+
+          class DisplayTaskSchema(BaseModel):
+              id: int
+              priority: int
+              text: str
+              completed: bool
+              created_at: datetime
+              model_config = ConfigDict(from_attributes=True)
+
+          class UserCreate(BaseModel):
+              name: str
+              email: str
+              username: str
+              password: str            # plain-text; hashed in repo layer
+
+          class UserDisplay(BaseModel):
+              username: str
+              email: str
+              created_at: datetime
+              model_config = ConfigDict(from_attributes=True)
+        contract: |
+          All schemas are plain Pydantic models with no ORM coupling except where
+          from_attributes=True is set. DisplayTaskSchema and UserDisplay are
+          output-only and never used as request bodies.
+      verification:
+        node: |
+          - DisplayTaskSchema.model_validate(Task(...)) succeeds
+          - UserDisplay.model_validate(User(...)) succeeds
+          - UpdateTaskSchema with all None fields is valid
+      docs: |
+        - TasksByDateSchema and the internal User schema from the source are
+          superseded by query parameters and UserDisplay respectively
+
+    utils:
+      kind: module
+      defines: "Password hashing and verification utilities using passlib"
+      composed_of: [python]
+      tier: 1
+      spec:
+        interface: |
+          def get_hashed_password(plain_password: str) -> str
+          def verify_hashed_password(plain_password: str, hashed_password: str) -> bool
+        contract: |
+          Uses passlib CryptContext with bcrypt scheme. get_hashed_password is
+          deterministic in scheme but non-deterministic in output (salt).
+          verify_hashed_password returns True iff plain matches hash.
+      verification:
+        node: |
+          - verify_hashed_password(pw, get_hashed_password(pw)) is True
+          - verify_hashed_password("wrong", get_hashed_password(pw)) is False
+      docs: |
+        - Imported by UserRepository only; never called from routers directly
+
+    auth:
+      kind: module
+      defines: "JWT token creation and FastAPI get_current_user dependency"
+      composed_of: [pyjwt, config, models, database, fastapi]
+      tier: 2
+      spec:
+        interface: |
+          def create_access_token(
+              subject: str,
+              expires_delta: timedelta | None = None
+          ) -> str
+
+          def create_refresh_token(
+              subject: str,
+              expires_delta: timedelta | None = None
+          ) -> str
+
+          async def get_current_user(
+              token: str = Depends(OAuth2PasswordBearer),
+              db_session: AsyncSession = Depends(get_async_session),
+          ) -> User
+        contract: |
+          Access tokens are signed with JWT_SECRET_KEY; refresh tokens with
+          JWT_REFRESH_SECRET_KEY. Both embed {"sub": subject, "exp": ...}.
+          get_current_user decodes the Bearer token, looks up User by username,
+          and raises HTTP 401 for any invalid/expired/missing token.
+      verification:
+        node: |
+          - create_access_token returns a decodable JWT with correct "sub"
+          - get_current_user raises 401 for expired token
+          - get_current_user raises 401 for unknown username
+      docs: |
+        - Used as Depends(get_current_user) in task_router
+        - Refresh token validation lives in auth_router, not here
+
+    user_repo:
+      kind: module
+      defines: "UserRepository: all database operations for the User model"
+      composed_of: [sqlalchemy, models, schemas, utils]
+      tier: 2
+      spec:
+        interface: |
+          class UserRepository:
+              def __init__(self, db_session: AsyncSession)
+
+              async def authenticate_user(self, username: str, password: str) -> User | Literal[False]
+              async def get_user_by_id(self, user_id: int) -> User | None
+              async def get_user_by_username_or_email(self, identifier: str) -> User | None
+              async def get_user_by_username(self, username: str) -> User | None
+              async def get_user_by_email(self, email: str) -> User | None
+              async def create_user(self, user_schema: UserCreate) -> User
+              async def delete_user_by_id(self, user_id: int) -> bool
+        contract: |
+          authenticate_user returns False (not None) on failure so callers can
+          do a falsy check. create_user hashes the plain-text password via utils
+          before persisting. delete_user_by_id performs a hard delete and returns
+          False when the user is not found. get_user_by_username_or_email matches
+          either field with OR logic.
+      verification:
+        node: |
+          - authenticate_user returns False for wrong password
+          - authenticate_user returns User for correct credentials
+          - create_user stores hashed (not plain) password
+          - delete_user_by_id returns False for non-existent id
+      docs: |
+        - Used by both auth_router and user_router
+
+    task_repo:
+      kind: module
+      defines: "TaskRepository: all database operations for the Task model"
+      composed_of: [sqlalchemy, models, schemas]
+      tier: 2
+      spec:
+        interface: |
+          class TaskRepository:
+              def __init__(self, db_session: AsyncSession)
+
+              async def get_task_by_id(self, task_id: int) -> Task | None
+              async def get_tasks_by_date(self, selected_date: date, current_user: User) -> list[Task]
+              async def create_task(self, schema: CreateTaskSchema, current_user: User) -> Task
+              async def delete_task(self, task_id: int, user_id: int) -> bool
+              async def update_task(self, task: Task, new_task: UpdateTaskSchema) -> Task
+              async def bulk_update_priorities(self, priorities: dict[int, int], current_user: User) -> None
+        contract: |
+          get_tasks_by_date filters by both posted_at == selected_date AND
+          user_id == current_user.id, ordered by priority ASC.
+          delete_task verifies ownership (user_id) before deleting; returns False
+          if not found or not owned.
+          bulk_update_priorities first verifies all provided task IDs belong to
+          current_user; raises HTTP 409 if the sets don't match, then issues a
+          bulk UPDATE via SQLAlchemy's update() with a list of dicts.
+          update_task only applies fields that are not None.
+      verification:
+        node: |
+          - get_tasks_by_date returns only tasks for the given date and user
+          - delete_task returns False for a task owned by a different user
+          - bulk_update_priorities raises 409 when an ID doesn't belong to user
+          - update_task with completed=False sets completed to False (falsy guard)
+      docs: |
+        - bulk_update_priorities uses SQLAlchemy ORM-level bulk update, not raw SQL
+
+    auth_router:
+      kind: module
+      defines: "FastAPI router for JWT login and token refresh endpoints"
+      composed_of: [fastapi, auth, user_repo, schemas, database]
+      tier: 3
+      ports:
+        login:
+          signature: "POST /user/jwt/create/ -> {access_token, refresh_token, token_type}"
+          kind: call
+          direction: out
+        refresh:
+          signature: "POST /user/jwt/refresh/ -> {access_token, refresh_token}"
+          kind: call
+          direction: out
+      spec:
+        interface: |
+          router = APIRouter(prefix="/user", tags=["user"])
+
+          POST /user/jwt/create/
+              body: OAuth2PasswordRequestForm (username, password)
+              response: {access_token: str, refresh_token: str, token_type: "Bearer"}
+              errors: 401 if credentials invalid
+
+          POST /user/jwt/refresh/
+              body: RefreshTokenSchema
+              response: {access_token: str, refresh_token: str}
+              errors: 401 if token expired, invalid, or user not found/deleted
+        contract: |
+          /jwt/create/ authenticates via UserRepository.authenticate_user using
+          the OAuth2 form, then mints both tokens via auth module.
+          /jwt/refresh/ decodes the refresh token using JWT_REFRESH_SECRET_KEY,
+          extracts the "sub" claim, looks up the user, checks is_deleted, then
+          mints a fresh token pair.
+      verification:
+        node: |
+          - POST /user/jwt/create/ with valid credentials returns 200 with token pair
+          - POST /user/jwt/create/ with bad password returns 401
+          - POST /user/jwt/refresh/ with expired token returns 401
+          - POST /user/jwt/refresh/ with valid token returns new token pair
+      docs: |
+        - token_type must be "Bearer" for Swagger UI OAuth2 flow to work
+
+    user_router:
+      kind: module
+      defines: "FastAPI router for user registration and deletion"
+      composed_of: [fastapi, user_repo, schemas, database]
+      tier: 3
+      ports:
+        register:
+          signature: "POST /users/register/ -> UserDisplay"
+          kind: call
+          direction: out
+        delete_user:
+          signature: "DELETE /users/{user_id}/ -> 204"
+          kind: call
+          direction: out
+      spec:
+        interface: |
+          router = APIRouter(prefix="/users", tags=["user"])
+
+          POST /users/register/
+              body: UserCreate
+              response: UserDisplay (201-equivalent, status_code=200)
+              errors: 409 if username or email already exists
+
+          DELETE /users/{user_id}/
+              path: user_id: int
+              response: 204 No Content
+              errors: 404 if user not found
+        contract: |
+          /register/ checks uniqueness of both username and email separately
+          before delegating to UserRepository.create_user. Returns UserDisplay
+          which omits the password. /users/{user_id}/ performs hard delete.
+          No authentication is required for either endpoint.
+      verification:
+        node: |
+          - POST /users/register/ with duplicate username returns 409
+          - POST /users/register/ with duplicate email returns 409
+          - POST /users/register/ with unique data returns UserDisplay
+          - DELETE /users/{user_id}/ with unknown id returns 404
+          - DELETE /users/{user_id}/ with valid id returns 204
+      docs: |
+        - Deletion has no auth guard; intended for admin use or testing
+
+    task_router:
+      kind: module
+      defines: "FastAPI router for authenticated task CRUD and priority reordering"
+      composed_of: [fastapi, task_repo, auth, models, schemas, database]
+      tier: 3
+      ports:
+        create_task:
+          signature: "POST /task/ -> DisplayTaskSchema"
+          kind: call
+          direction: out
+        list_tasks:
+          signature: "GET /task/?selected_date=<date> -> list[DisplayTaskSchema]"
+          kind: call
+          direction: out
+        update_order:
+          signature: "PATCH /task/update-order/ -> str"
+          kind: call
+          direction: out
+        update_task:
+          signature: "PATCH /task/{task_id}/ -> DisplayTaskSchema"
+          kind: call
+          direction: out
+        delete_task:
+          signature: "DELETE /task/{task_id}/ -> 204"
+          kind: call
+          direction: out
+      spec:
+        interface: |
+          router = APIRouter(prefix="/task", tags=["task"])
+          All endpoints require: current_user: User = Depends(get_current_user)
+
+          POST /task/
+              body: CreateTaskSchema
+              response: DisplayTaskSchema
+
+          GET /task/
+              query: selected_date: date
+              response: list[DisplayTaskSchema]
+
+          PATCH /task/update-order/
+              body: UpdateTaskPrioritiesSchema
+              response: "Priorities have been updated"
+
+          PATCH /task/{task_id}/
+              path: task_id: int
+              body: UpdateTaskSchema
+              response: DisplayTaskSchema
+              errors: 404 if not found, 409 if task belongs to different user
+
+          DELETE /task/{task_id}/
+              path: task_id: str
+              response: 204 No Content
+              errors: 404 if not found or not owned
+        contract: |
+          All mutations are scoped to current_user. PATCH /{task_id}/ fetches the
+          task first via get_task_by_id, then validates ownership (task.user_id ==
+          current_user.id) before delegating to update_task. PATCH /update-order/
+          delegates ownership validation entirely to bulk_update_priorities.
+          Route order matters: /update-order/ must be registered before /{task_id}/
+          to avoid FastAPI treating "update-order" as a task_id path segment.
+      verification:
+        node: |
+          - POST /task/ creates task owned by the current user
+          - GET /task/ returns only tasks for selected_date belonging to current user
+          - PATCH /task/{task_id}/ with wrong owner returns 409
+          - PATCH /task/{task_id}/ with unknown id returns 404
+          - PATCH /task/update-order/ with foreign task ids returns 409
+          - DELETE /task/{task_id}/ returns 204 on success
+          - All endpoints return 401 without a valid Bearer token
+      docs: |
+        - Route registration order is critical: update-order before {task_id}
+
+    main_app:
+      kind: module
+      defines: "FastAPI application entry point: app factory, CORS, router inclusion"
+      composed_of: [fastapi, auth_router, user_router, task_router, database, models]
+      tier: 4
+      spec:
+        interface: |
+          app: FastAPI
+
+          Routers included:
+              auth_router.router   (prefix already set to /user)
+              user_router.router   (prefix already set to /users)
+              task_router.router   (prefix already set to /task)
+
+          CORS: allow_origins from settings, allow_credentials=True,
+                allow_methods=["*"], allow_headers=["*"]
+
+          Startup event: run async Alembic migrations or create_all on metadata
+        contract: |
+          Single `app` object is the ASGI entry point (uvicorn backend.main:app).
+          All routers are included at the app level with no additional prefix.
+          CORS middleware is added before routers.
+      verification:
+        node: |
+          - app includes all three routers
+          - CORS headers present on preflight OPTIONS request
+          - GET /docs returns 200 (Swagger UI available)
+      docs: |
+        - Run with: uvicorn backend.main:app --reload
+
+function:
+  exports:
+    - name: login
+      kind: port
+      from: auth_router.login
+      signature: "POST /user/jwt/create/ -> {access_token, refresh_token, token_type}"
+    - name: refresh_token
+      kind: port
+      from: auth_router.refresh
+      signature: "POST /user/jwt/refresh/ -> {access_token, refresh_token}"
+    - name: register_user
+      kind: port
+      from: user_router.register
+      signature: "POST /users/register/ -> UserDisplay"
+    - name: delete_user
+      kind: port
+      from: user_router.delete_user
+      signature: "DELETE /users/{user_id}/ -> 204"
+    - name: create_task
+      kind: port
+      from: task_router.create_task
+      signature: "POST /task/ -> DisplayTaskSchema"
+    - name: list_tasks
+      kind: port
+      from: task_router.list_tasks
+      signature: "GET /task/?selected_date=<date> -> list[DisplayTaskSchema]"
+    - name: update_order
+      kind: port
+      from: task_router.update_order
+      signature: "PATCH /task/update-order/ -> str"
+    - name: update_task
+      kind: port
+      from: task_router.update_task
+      signature: "PATCH /task/{task_id}/ -> DisplayTaskSchema"
+    - name: delete_task
+      kind: port
+      from: task_router.delete_task
+      signature: "DELETE /task/{task_id}/ -> 204"
+
+verification:
+  - node: auth_router
+    backend: pytest
+    tests: tests/test_auth_router.py
+  - node: user_router
+    backend: pytest
+    tests: tests/test_user_router.py
+  - node: task_router
+    backend: pytest
+    tests: tests/test_task_router.py
+  - node: user_repo
+    backend: pytest
+    tests: tests/test_user_repo.py
+  - node: task_repo
+    backend: pytest
+    tests: tests/test_task_repo.py

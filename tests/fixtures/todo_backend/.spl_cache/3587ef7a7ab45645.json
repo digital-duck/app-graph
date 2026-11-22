@@ -1,0 +1,6 @@
+{
+  "node": "todo_orm_model",
+  "tech_profile": "python_fastapi",
+  "cached_at": "2026-08-12T03:36:44.130230+00:00",
+  "code": "```python\nfrom __future__ import annotations\n\nfrom sqlalchemy import Boolean, Integer, String\nfrom sqlalchemy.orm import Mapped, mapped_column\n\nfrom app.database import Base\n\n\nclass TodoModel(Base):\n    __tablename__ = \"todos\"\n\n    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)\n    title: Mapped[str] = mapped_column(String, nullable=False)\n    completed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)\n```"
+}

@@ -1,0 +1,556 @@
+-- compile_blueprint.spl
+-- The "compile" transformation (action item 1b, docs/DEV/BUILD/README-TODO.md §1):
+-- natural-language intent -> a well-formed component graph.yaml (schema v2.1/v2.2).
+--
+-- Per Wen (2026-08-12): this step needs no separate fidelity metric — a bad
+-- decomposition just produces a blueprint whose generated code fails the
+-- existing forward-pass verification (build_component.spl's test gates), and
+-- the user iterates on the graph.yaml like any other authoring mistake. What
+-- this workflow DOES check, the same way build_component.spl checks
+-- generated code before accepting it, is structural validity: does the
+-- candidate graph.yaml parse and pass validate_full() at all (no cycles, no
+-- dangling references, no undeclared entry)? That's a much lower bar than
+-- "is this the RIGHT blueprint" — deliberately so; getting the intent right
+-- is the user's iteration loop, not something this workflow can verify.
+--
+-- Two modes, selected by @mode:
+--
+-- 'intent' (default, original behavior, unchanged) — one free-text intent ->
+-- one component graph.yaml. domain_type: software, no imports:.
+--
+--   spl3 run spl/compile_blueprint.spl --tools spl/tools.py \
+--     -p intent="A counter API: GET /count returns the current count, POST /increment adds one" \
+--     -p output_path=apps/counter/backend.graph.yaml \
+--     --llm claude_cli
+--
+-- 'extraction' (2026-08-14, powers `grafcode extract --llm`) — takes the
+-- output of grafcode extract's AST pass (analysis.json contents + a handful
+-- of representative source file contents) instead of a hand-written intent,
+-- classifies the app's *shape* first (classify_shape), then branches:
+--   - INTEGRATED  -> three compile passes (backend/frontend/main), written
+--                    under @output_dir as backend.graph.yaml/frontend.graph.yaml/
+--                    main.graph.yaml
+--   - SINGLE      -> one compile pass against an existing tech_profile,
+--                    written to @output_path
+--   - NO_FIT      -> classify_shape also proposes a new tech_profile name;
+--                    draft_tech_profile() writes a reviewable
+--                    TECH_PROFILE_DRAFT.md (never auto-merged into
+--                    spl/tech_profiles.py — confirmed with the user,
+--                    2026-08-14), then still attempts a best-effort SINGLE
+--                    compile pass against the drafted profile's name.
+--
+--   spl3 run spl/compile_blueprint.spl --tools spl/tools.py \
+--     -p mode=extraction \
+--     -p analysis_json="$(cat apps/build/analysis.json)" \
+--     -p source_context="$(cat apps/build/source_context.txt)" \
+--     -p app_name=recipe_app \
+--     -p output_dir=apps/build/blueprint \
+--     -p output_path=apps/build/blueprint/component.graph.yaml \
+--     --llm claude_cli
+--
+-- Note on why this stayed one WORKFLOW instead of splitting 'extraction'
+-- into a second file: every other .spl file in this project is one file =
+-- one WORKFLOW (spl3's multi-workflow-per-file / IMPORT support is real but
+-- unused anywhere else in this codebase, and build_app.spl's own header
+-- comment already documents the one sanctioned cross-workflow composition
+-- mechanism — shelling out to `spl3 run` via a @spl_tool, see
+-- run_build_component in tools.py). 'extraction' mode doesn't need that
+-- mechanism — it just calls the same decompose_intent/repair_blueprint
+-- functions the 'intent' mode already uses, 1 or 3 times in a row within
+-- the same run, so there was no cross-workflow call to make.
+
+CREATE FUNCTION decompose_intent(intent TEXT, domain_type TEXT, tech_profile TEXT)
+RETURN TEXT
+AS $$
+You are decomposing a natural-language application description into a
+well-formed "blueprint" graph.yaml — a fine-grained, node-level specification
+that a separate tool (build_component.spl) will later walk in dependency
+order, generating and verifying one file of code per node. Your job is
+ONLY to produce the graph.yaml structure — do not write any application code.
+
+Application intent to decompose:
+{intent}
+
+Target domain_type: {domain_type}
+Target tech_profile: {tech_profile}
+
+Schema shape, illustrated by a complete, real, minimal example (a tiny
+counter API — study its shape exactly, then decompose the actual intent
+above into the same shape, adjusting node count/names/specs to fit):
+
+```yaml
+graph: counter_backend
+version: "2.1"
+domain_type: software
+domain: software/backend/fastapi
+target_languages: [python]
+description: |
+  FastAPI backend: in-memory counter with a GET/POST API.
+capstone: counter_routes
+
+blueprint:
+  id: counter_backend
+  schema_version: "2.2"
+  domain_type: software
+  provenance: authored
+  parent_blueprint: null
+  lineage: []
+
+form:
+  primitives:
+    python:
+      defines: "Python 3.x runtime and standard library"
+      tier: 0
+      kind: config
+    fastapi:
+      defines: "FastAPI web framework"
+      tier: 0
+      kind: config
+
+  nodes:
+    counter_store:
+      kind: module
+      defines: "In-memory counter state and increment function"
+      composed_of: [python]
+      tier: 1
+      spec:
+        interface: |
+          get_count() -> int
+          increment() -> int
+        contract: |
+          Starts at 0. increment() adds one and returns the new value.
+      verification:
+        node: |
+          - get_count() returns 0 initially
+          - increment() increases the value by exactly 1 each call
+      docs: |
+        - Pure in-memory state, no persistence
+
+    counter_routes:
+      kind: module
+      defines: "FastAPI router exposing the counter as REST endpoints"
+      composed_of: [fastapi, counter_store]
+      tier: 2
+      ports:
+        get_count:
+          signature: "GET /count -> int"
+          kind: call
+          direction: out
+        increment:
+          signature: "POST /increment -> int"
+          kind: call
+          direction: out
+      spec:
+        interface: |
+          GET  /count      -> int
+          POST /increment   -> int
+        contract: |
+          Both routes call into counter_store; no direct state manipulation in the route handlers.
+      verification:
+        node: |
+          - GET /count returns the current value
+          - POST /increment increases the value and returns the new one
+      docs: |
+        - The backend''s public surface
+
+function:
+  exports:
+    - name: get_count
+      kind: port
+      from: counter_routes.get_count
+      signature: "GET /count -> int"
+    - name: increment
+      kind: port
+      from: counter_routes.increment
+      signature: "POST /increment -> int"
+
+verification:
+  - node: counter_routes
+    backend: pytest
+    tests: tests/test_routes.py
+```
+
+Rules, all non-negotiable:
+1. `form.nodes` must form a DAG — every `composed_of` entry must reference a
+   node or primitive declared earlier (lower tier), never itself or a later one.
+2. Every node needs `kind`, `defines`, `tier` (integer, primitives are tier 0),
+   and a `spec.interface`/`spec.contract` pair specific enough that an LLM
+   could generate the actual file from it without further clarification.
+3. `capstone` must name the graph''s own last/highest-tier node.
+4. Keep node count proportional to the intent''s actual complexity — do not
+   pad with nodes the intent doesn''t call for, and do not collapse
+   distinct concerns (e.g. data model vs. HTTP routes) into one node.
+5. Output ONLY the YAML document. No preamble, no markdown fences, no
+   commentary before or after.
+$$;
+
+CREATE FUNCTION repair_blueprint(candidate_yaml TEXT, validation_error TEXT)
+RETURN TEXT
+AS $$
+The following candidate graph.yaml failed structural validation.
+
+Validation error:
+{validation_error}
+
+Candidate:
+{candidate_yaml}
+
+Fix ONLY what is needed to make it parse and pass validation — do not
+otherwise redesign the graph. Output ONLY the corrected YAML document, no
+preamble, no markdown fences.
+$$;
+
+CREATE FUNCTION classify_shape(analysis_json TEXT, source_context TEXT)
+RETURN TEXT
+AS $$
+You are classifying the *shape* of an existing application, extracted from a
+real repository by a static-analysis pass, before it gets decomposed into a
+blueprint graph.yaml (or set of graph.yaml files).
+
+Static analysis of the repo (routes/schemas/ORM models/services/Vue
+components/API functions found):
+{analysis_json}
+
+Representative source file contents (a sample, not the whole repo):
+{source_context}
+
+Decide which of these three shapes best fits what you saw:
+
+- INTEGRATED — a real HTTP backend AND a separate frontend that calls it
+  over that HTTP API (e.g. FastAPI + Vue, Express + React). Two genuinely
+  separate deployable processes with a client/server boundary between them.
+- SINGLE — one process, one deployable component: a backend-only
+  service/library with no separate frontend, a CLI tool, a static HTML page
+  with no backend, or a single-process app with no client/server REST split
+  at all (e.g. a Streamlit app, a Jupyter-notebook-driven tool). Do NOT
+  force this into INTEGRATED just because the codebase happens to contain
+  both Python and HTML/JS files — the test is whether there are two
+  separately-running processes talking over HTTP, not which languages
+  appear.
+- NO_FIT — the analysis above is too thin or ambiguous to confidently
+  classify either way (e.g. almost nothing was found by the static pass, or
+  the source samples contradict the analysis).
+
+Also name the best-fitting tech_profile for the code you actually saw,
+choosing from EXACTLY this list if one genuinely fits: python_fastapi,
+vue_typescript, python_library, curriculum. If none of these fit the actual
+language/framework you observed, propose a new short snake_case profile
+name instead (e.g. streamlit_app, static_html, express_typescript) — do not
+force a bad fit just to reuse an existing name.
+
+Output EXACTLY two lines, nothing else, no preamble, no commentary:
+SHAPE: <INTEGRATED|SINGLE|NO_FIT>
+PROFILE: <existing_profile_name_or_a_new_proposed_name>
+$$;
+
+CREATE FUNCTION draft_tech_profile(analysis_json TEXT, source_context TEXT, profile_name TEXT)
+RETURN TEXT
+AS $$
+None of this project's existing tech_profiles (spl/tech_profiles.py's
+PROFILES dict: python_fastapi, vue_typescript, python_library, curriculum)
+fit the application below — you proposed a new profile name: {profile_name}.
+
+Static analysis:
+{analysis_json}
+
+Representative source file contents:
+{source_context}
+
+Draft a new tech_profile writeup for **{profile_name}**, in the same shape
+as an existing PROFILES entry: a style-guide prompt fragment that would be
+prepended to every node-generation call for an app of this shape (language/
+framework conventions, file layout, naming rules, what NOT to invent —
+e.g. this project's existing profiles all include a "never use a graph node
+id as a generated identifier" rule; keep that rule and add whatever else is
+specific to this stack), plus a suggested verify command (the equivalent of
+VERIFY_CMDS — e.g. `pytest` for Python, `streamlit run --headless` health
+check, `npm test`, or an HTML validator, whichever fits what you saw).
+
+This is a REVIEWABLE DRAFT, not something that gets merged automatically —
+spl/tech_profiles.py's PROFILES/VERIFY_CMDS dicts are a shared, repo-wide
+style guide governing every future app of this shape, so a human reviews
+and merges this by hand. Write it as a short Markdown document:
+
+# Proposed tech_profile: {profile_name}
+
+## Style guide (PROFILES["{profile_name}"] candidate text)
+<the prompt-fragment prose itself>
+
+## Suggested verify command (VERIFY_CMDS["{profile_name}"] candidate)
+<the command>
+
+## Why no existing profile fit
+<one or two sentences>
+
+Output ONLY that Markdown document, no other commentary.
+$$;
+
+CREATE FUNCTION decompose_main_graph(extraction_intent TEXT, app_name TEXT)
+RETURN TEXT
+AS $$
+You are producing the system-level main.graph.yaml for an INTEGRATED app —
+the one file that imports a backend.graph.yaml and a frontend.graph.yaml
+component (already compiled separately) and composes them into cross-
+component applications. Do NOT re-specify the backend or frontend's own
+internal nodes here — this file only imports them and describes the
+use-cases that span both.
+
+Reverse-engineered intent (from static analysis of an existing repo):
+{extraction_intent}
+
+App name: {app_name}
+
+Schema shape, illustrated by a complete, real example (a to-do app's
+main.graph.yaml — study its shape exactly, then produce the same shape for
+the actual app above, adjusting domain/comment/imports/applications to fit):
+
+```yaml
+domain: software/apps/{app_name}
+target_languages: [python, typescript]
+comment: |
+  One-paragraph description of the whole app and what it does for a user.
+capstone: manage_{app_name}
+
+blueprint:
+  id: {app_name}_app
+  schema_version: "2.2"
+  graph_schema_version: "2.1"
+  domain_type: integrated
+  provenance: reverse
+  parent_blueprint: null
+  lineage: []
+
+imports:
+  - id: backend
+    graph: ./backend.graph.yaml
+    comment: |
+      One sentence: what the backend serves, at what port, CORS policy.
+  - id: frontend
+    graph: ./frontend.graph.yaml
+    comment: |
+      One sentence: what the frontend is, at what port, what it calls.
+
+ports:
+  backend: ${{ settings.BACKEND_FASTAPI_PORT }}
+  frontend: ${{ settings.FRONTEND_VITE_PORT }}
+
+form:
+  nodes:
+    app_shell:
+      kind: component
+      defines: "System integration shell: frontend consuming backend REST API via CORS"
+      tier: 1
+      depends_on: [backend, frontend]
+
+    readme:
+      kind: doc
+      defines: "README.md: product-level overview, setup, and run instructions"
+      composed_of: [app_shell]
+      tier: 2
+      spec:
+        interface: |
+          Output: README.md at the system root — plain Markdown, not code.
+        contract: |
+          Title, one-paragraph description, Architecture, Running the full
+          system, Applications (one line per applications: entry below).
+
+function:
+  exports:
+    - name: manage_{app_name}
+      kind: port
+      from: app_shell.main
+      signature: "() -> void"
+
+applications:
+  <one entry per real cross-component use-case found in the reverse-engineered
+   intent — each needs backend: [<backend node ids>] and frontend: [<frontend
+   node ids>], a user_story, and a contract. End with exactly one capstone:
+   true entry (tier one higher than the rest) whose needs.applications lists
+   every other application id — the manage_{app_name} entry above.>
+
+verification:
+  - node: app_shell
+    tool: integrate_system.spl
+    checks:
+      - CORS headers present on all backend responses
+      - frontend loads without console errors
+      - every application passes acceptance tests against the live system
+```
+
+Rules, all non-negotiable:
+1. `imports:` must reference exactly `./backend.graph.yaml` and
+   `./frontend.graph.yaml` — those two files are compiled separately by this
+   same pipeline, in this same output directory.
+2. Do not declare `form.nodes` for anything backend or frontend already
+   owns — only `app_shell` and `readme` (or their equivalents) belong here.
+3. Every `applications:` entry needs at least one backend node id and one
+   frontend node id under `needs`, a concrete `spec.user_story`, and a
+   concrete `spec.contract` — derive these from the reverse-engineered
+   intent above, don't invent unrelated use-cases.
+4. Exactly one `applications:` entry has `capstone: true`, at the highest
+   tier, with `needs.applications` listing every other application id.
+5. Output ONLY the YAML document. No preamble, no markdown fences, no
+   commentary before or after.
+$$;
+
+WORKFLOW compile_blueprint
+    INPUT:
+        @intent TEXT DEFAULT '',
+        @domain_type TEXT DEFAULT 'software',
+        @tech_profile TEXT DEFAULT 'python_fastapi',
+        @output_path TEXT DEFAULT 'apps/build/component.graph.yaml',
+        @log_dir TEXT DEFAULT 'logs/spl',
+        @max_repair_attempts INTEGER DEFAULT 2,
+        @mode TEXT DEFAULT 'intent',
+        @analysis_json TEXT DEFAULT '',
+        @source_context TEXT DEFAULT '',
+        @app_name TEXT DEFAULT 'build',
+        @output_dir TEXT DEFAULT ''
+    OUTPUT:
+        @result TEXT
+DO
+    CALL now_float() INTO @t_start
+    CALL now_iso() INTO @_ts
+    CALL sanitize_ts(@_ts) INTO @_ts_safe
+    CALL make_log_path(@log_dir, @_ts_safe) INTO @log_file
+    CALL write_file(@log_file, f"# Compile blueprint\n\nmode: {@mode}\nstarted: {@_ts}\n\n", "w") INTO @_
+
+    EVALUATE @mode
+        WHEN contains("extraction") THEN
+            LOGGING "Classifying app shape from static analysis + source context" LEVEL INFO
+            GENERATE classify_shape(@analysis_json, @source_context) INTO @class_result
+            CALL classification_shape(@class_result) INTO @shape
+            CALL classification_profile(@class_result) INTO @profile_name
+            CALL write_file(@log_file, f"## Shape classification\n\n{@class_result}\n\n", "a") INTO @_
+            LOGGING f"Shape: {@shape}, profile: {@profile_name}" LEVEL INFO
+
+            CALL is_known_tech_profile(@profile_name) INTO @is_known
+            EVALUATE @is_known
+                WHEN contains("false") THEN
+                    LOGGING f"No existing tech_profile fits ({@profile_name}) — drafting one for review" LEVEL WARN
+                    GENERATE draft_tech_profile(@analysis_json, @source_context, @profile_name) INTO @draft
+                    CALL write_tech_profile_draft(@draft, f"{@output_dir}/TECH_PROFILE_DRAFT.md") INTO @draft_path
+                    LOGGING f"Tech-profile draft written to {@draft_path} — review before use" LEVEL WARN
+                ELSE
+                    LOGGING f"Using existing tech_profile: {@profile_name}" LEVEL INFO
+            END
+
+            @extraction_intent := f"Static analysis of an existing repo (routes/schemas/models/services/components found):\n{@analysis_json}\n\nRepresentative source file contents:\n{@source_context}\n\nReverse-engineer the functional intent of this application from the above, then decompose it into a blueprint."
+
+            EVALUATE @shape
+                WHEN contains("INTEGRATED") THEN
+                    LOGGING "Shape: integrated (backend + frontend) — compiling three components" LEVEL INFO
+
+                    GENERATE decompose_intent(f"{@extraction_intent}\n\nProduce ONLY the BACKEND component (domain_type: software) — a REST API. Do not describe the frontend.", "software", @profile_name) WITH OUTPUT BUDGET 16000 TOKENS INTO @backend_candidate
+                    CALL ensure_component_metadata(@backend_candidate, @profile_name, "BACKEND_FASTAPI_PORT") INTO @backend_candidate
+                    CALL validate_blueprint_yaml(@backend_candidate, @output_dir) INTO @backend_validation
+                    @b_attempt := 0
+                    WHILE @backend_validation != "ok" AND @b_attempt < @max_repair_attempts DO
+                        LOGGING f"backend validation attempt {@b_attempt}: {@backend_validation}" LEVEL WARN
+                        GENERATE repair_blueprint(@backend_candidate, @backend_validation) WITH OUTPUT BUDGET 16000 TOKENS INTO @backend_candidate
+                        CALL validate_blueprint_yaml(@backend_candidate, @output_dir) INTO @backend_validation
+                        @b_attempt := @b_attempt + 1
+                    END
+                    EVALUATE @backend_validation
+                        WHEN contains("error") THEN
+                            CALL write_file(@log_file, f"## FAILED (backend)\n\n{@backend_validation}\n", "a") INTO @_
+                            RETURN f"FAILED: backend.graph.yaml did not pass structural validation after {@b_attempt} repair attempts — {@backend_validation} — see {@log_file}"
+                    END
+                    CALL write_blueprint_file(@backend_candidate, f"{@output_dir}/backend.graph.yaml") INTO @backend_path
+                    LOGGING f"backend.graph.yaml: {@backend_validation} ({@b_attempt} repairs) -> {@backend_path}" LEVEL INFO
+
+                    GENERATE decompose_intent(f"{@extraction_intent}\n\nProduce ONLY the FRONTEND component (domain_type: software) — a client calling the backend's REST API. Do not describe the backend's own internal nodes.", "software", "vue_typescript") WITH OUTPUT BUDGET 16000 TOKENS INTO @frontend_candidate
+                    CALL ensure_component_metadata(@frontend_candidate, "vue_typescript", "FRONTEND_VITE_PORT") INTO @frontend_candidate
+                    CALL validate_blueprint_yaml(@frontend_candidate, @output_dir) INTO @frontend_validation
+                    @f_attempt := 0
+                    WHILE @frontend_validation != "ok" AND @f_attempt < @max_repair_attempts DO
+                        LOGGING f"frontend validation attempt {@f_attempt}: {@frontend_validation}" LEVEL WARN
+                        GENERATE repair_blueprint(@frontend_candidate, @frontend_validation) WITH OUTPUT BUDGET 16000 TOKENS INTO @frontend_candidate
+                        CALL validate_blueprint_yaml(@frontend_candidate, @output_dir) INTO @frontend_validation
+                        @f_attempt := @f_attempt + 1
+                    END
+                    EVALUATE @frontend_validation
+                        WHEN contains("error") THEN
+                            CALL write_file(@log_file, f"## FAILED (frontend)\n\n{@frontend_validation}\n", "a") INTO @_
+                            RETURN f"FAILED: frontend.graph.yaml did not pass structural validation after {@f_attempt} repair attempts — {@frontend_validation} — see {@log_file}"
+                    END
+                    CALL write_blueprint_file(@frontend_candidate, f"{@output_dir}/frontend.graph.yaml") INTO @frontend_path
+                    LOGGING f"frontend.graph.yaml: {@frontend_validation} ({@f_attempt} repairs) -> {@frontend_path}" LEVEL INFO
+
+                    GENERATE decompose_main_graph(@extraction_intent, @app_name) WITH OUTPUT BUDGET 16000 TOKENS INTO @main_candidate
+                    CALL validate_blueprint_yaml(@main_candidate, @output_dir) INTO @main_validation
+                    @m_attempt := 0
+                    WHILE @main_validation != "ok" AND @m_attempt < @max_repair_attempts DO
+                        LOGGING f"main validation attempt {@m_attempt}: {@main_validation}" LEVEL WARN
+                        GENERATE repair_blueprint(@main_candidate, @main_validation) WITH OUTPUT BUDGET 16000 TOKENS INTO @main_candidate
+                        CALL validate_blueprint_yaml(@main_candidate, @output_dir) INTO @main_validation
+                        @m_attempt := @m_attempt + 1
+                    END
+                    CALL time_elapsed(@t_start) INTO @elapsed
+                    EVALUATE @main_validation
+                        WHEN contains("error") THEN
+                            CALL write_file(@log_file, f"## FAILED (main)\n\n{@main_validation}\n", "a") INTO @_
+                            RETURN f"FAILED: main.graph.yaml did not pass structural validation after {@m_attempt} repair attempts — {@main_validation} — see {@log_file}"
+                    END
+                    CALL write_blueprint_file(@main_candidate, f"{@output_dir}/main.graph.yaml") INTO @main_path
+                    LOGGING f"main.graph.yaml: {@main_validation} ({@m_attempt} repairs) -> {@main_path}" LEVEL INFO
+
+                    CALL write_file(@log_file, f"## Complete (integrated)\n\nbackend: {@backend_path} ({@backend_validation})\nfrontend: {@frontend_path} ({@frontend_validation})\nmain: {@main_path} ({@main_validation})\nelapsed: {@elapsed}s\n", "a") INTO @_
+                    RETURN f"ok: integrated blueprint written to {@output_dir} (main.graph.yaml, backend.graph.yaml, frontend.graph.yaml), {@elapsed}s — structurally valid only, review before building"
+
+                ELSE
+                    -- SINGLE, and NO_FIT's best-effort fallback (same code path,
+                    -- @profile_name already resolved above either way)
+                    LOGGING f"Shape: {@shape} — compiling one component against {@profile_name}" LEVEL INFO
+                    GENERATE decompose_intent(@extraction_intent, "software", @profile_name) WITH OUTPUT BUDGET 16000 TOKENS INTO @candidate
+                    CALL validate_blueprint_yaml(@candidate, @output_dir) INTO @validation
+                    @attempt := 0
+                    WHILE @validation != "ok" AND @attempt < @max_repair_attempts DO
+                        LOGGING f"Validation attempt {@attempt}: {@validation}" LEVEL WARN
+                        GENERATE repair_blueprint(@candidate, @validation) WITH OUTPUT BUDGET 16000 TOKENS INTO @candidate
+                        CALL validate_blueprint_yaml(@candidate, @output_dir) INTO @validation
+                        @attempt := @attempt + 1
+                    END
+                    CALL time_elapsed(@t_start) INTO @elapsed
+                    EVALUATE @validation
+                        WHEN contains("error") THEN
+                            CALL write_file(@log_file, f"## FAILED\n\n{@validation}\n", "a") INTO @_
+                            RETURN f"FAILED: could not produce a structurally valid blueprint after {@attempt} repair attempts — {@validation}"
+                        ELSE
+                            CALL write_blueprint_file(@candidate, @output_path) INTO @path
+                            CALL write_file(@log_file, f"## Complete\n\nwritten: {@path}\nshape: {@shape}\nprofile: {@profile_name}\nrepair attempts: {@attempt}\nelapsed: {@elapsed}s\n", "a") INTO @_
+                            RETURN f"ok: {@path} (shape={@shape}, profile={@profile_name}, {@attempt} repair attempts, {@elapsed}s) — structurally valid only, review before building"
+                    END
+            END
+
+        ELSE
+            -- 'intent' mode — original behavior, unchanged.
+            LOGGING f"Decomposing intent into a {@domain_type}/{@tech_profile} blueprint" LEVEL INFO
+            GENERATE decompose_intent(@intent, @domain_type, @tech_profile) WITH OUTPUT BUDGET 16000 TOKENS INTO @candidate
+
+            CALL validate_blueprint_yaml(@candidate) INTO @validation
+            @attempt := 0
+
+            WHILE @validation != "ok" AND @attempt < @max_repair_attempts DO
+                LOGGING f"Validation attempt {@attempt}: {@validation}" LEVEL WARN
+                CALL write_file(@log_file, f"## Repair attempt {@attempt}\n\n{@validation}\n\n", "a") INTO @_
+                GENERATE repair_blueprint(@candidate, @validation) WITH OUTPUT BUDGET 16000 TOKENS INTO @candidate
+                CALL validate_blueprint_yaml(@candidate) INTO @validation
+                @attempt := @attempt + 1
+            END
+
+            CALL time_elapsed(@t_start) INTO @elapsed
+
+            EVALUATE @validation
+                WHEN contains("error") THEN
+                    LOGGING f"Compile failed after {@attempt} repair attempts: {@validation}" LEVEL ERROR
+                    CALL write_file(@log_file, f"## FAILED\n\n{@validation}\n", "a") INTO @_
+                    RETURN f"FAILED: could not produce a structurally valid blueprint after {@attempt} repair attempts — {@validation}"
+                ELSE
+                    CALL write_blueprint_file(@candidate, @output_path) INTO @path
+                    LOGGING f"Compiled blueprint written to {@path} in {@elapsed}s ({@attempt} repair attempts)" LEVEL INFO
+                    CALL write_file(@log_file, f"## Complete\n\nwritten: {@path}\nrepair attempts: {@attempt}\nelapsed: {@elapsed}s\n", "a") INTO @_
+                    RETURN f"ok: {@path} (structurally valid, {@attempt} repair attempts, {@elapsed}s) — NOT a claim the blueprint matches your intent, only that it's well-formed; run build_component.spl against it and iterate."
+            END
+    END
+END

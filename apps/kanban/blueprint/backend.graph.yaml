@@ -1,0 +1,421 @@
+# ── Unified Duality Graph Schema v2.1 — Software Profile ────────────────────
+# Migrated from graph-driven-workflow/apps/SPL/kanban/components/backend/graph.yaml
+domain: software/backend/fastapi
+target_languages: [python]
+comment: |
+  FastAPI backend: schema + enum, DB connection, ORM model, CRUD, board-view
+  grouping, API routes.
+capstone: api_routes
+
+# tech_profile/port: orchestration metadata read directly by spl/tools.py's
+# system-level tools (component_tech_profile/component_port) — not part of
+# the core graph_code schema (GraphDomain has no field for either), since
+# build_order/validate_full/check_call_contracts don't need to know how or
+# where a component runs, only build_app.spl/integrate_system.spl do.
+tech_profile: python_fastapi
+port: ${{ settings.BACKEND_FASTAPI_PORT }}
+
+# Source of truth for id/version/domain_type — see
+# docs/DEV/BUILD/refactoring-plan-v1.md §1.1.
+blueprint:
+  id: kanban_app_backend
+  schema_version: "2.2"
+  graph_schema_version: "2.1"
+  domain_type: software
+  provenance: authored
+  parent_blueprint: null
+  lineage: []
+
+form:
+  primitives:
+    python:
+      defines: "Python 3.x runtime and standard library"
+      tier: 0
+      kind: config
+    sqlite:
+      defines: "SQLite embedded relational database engine"
+      tier: 0
+      kind: config
+    fastapi:
+      defines: "FastAPI web framework: routing, dependency injection, OpenAPI generation"
+      tier: 0
+      kind: config
+    sqlalchemy:
+      defines: "SQLAlchemy ORM: declarative models, session management, query DSL"
+      tier: 0
+      kind: config
+    pydantic:
+      defines: "Pydantic: runtime data validation and serialization via type hints"
+      tier: 0
+      kind: config
+
+  nodes:
+    requirements:
+      kind: doc
+      defines: "requirements.txt: pinned pip dependencies for this backend"
+      composed_of: [python, sqlite, fastapi, sqlalchemy, pydantic]
+      tier: 1
+      spec:
+        interface: |
+          Output: requirements.txt at the component root (NOT under app/) — plain pip
+          requirements format, one package per line, not Python code.
+        contract: |
+          List the pip packages needed to install and run this backend, with minimum-version
+          pins (>=). Include:
+          - fastapi, sqlalchemy, pydantic (from the primitives above — these are pip package
+            names, do not list "python" or "sqlite" themselves, they are not pip packages)
+          - uvicorn[standard] — needed to actually run the server (uvicorn app.main:app),
+            even though it is not one of the primitives above and is never imported directly
+          - pytest, httpx — needed to run this component's test suite (httpx is required by
+            FastAPI's TestClient)
+          One package per line, e.g. `fastapi>=0.111.0`. No comments, no section headers,
+          no pip install command — just the requirements.txt file content itself.
+      verification:
+        node: |
+          - requirements.txt exists at component root
+          - contains fastapi, sqlalchemy, pydantic, uvicorn, pytest, httpx (one per line)
+      docs: |
+        - Generated early (depends only on primitives, not on generated code) since it's a
+          static manifest of the tech stack, not something that needs the implementation
+          to exist first
+        - Not verified against the code (kind: doc nodes skip compile/edge-symbol checks — see
+          spl/tools.py verify_node/verify_edges)
+
+    data_schema:
+      kind: concept
+      defines: "Pydantic models + KanbanStatus enum: CardCreate, Card, MoveRequest, BoardView"
+      composed_of: [pydantic, python]
+      tier: 1
+      spec:
+        interface: |
+          Imports:
+            from enum import Enum
+            from datetime import datetime
+            from pydantic import BaseModel, ConfigDict, field_validator
+
+          class KanbanStatus(str, Enum):
+            backlog    = "backlog"
+            in_progress = "in_progress"
+            done       = "done"
+
+          CardCreate(title: str, description: str = "", status: KanbanStatus = KanbanStatus.backlog)
+          Card(id: int, title: str, description: str, status: KanbanStatus,
+               position: int, created_at: datetime)
+            — model_config = ConfigDict(from_attributes=True)  [class attribute, NOT an import]
+          MoveRequest(status: KanbanStatus)
+          BoardView(backlog: list[Card], in_progress: list[Card], done: list[Card])
+        contract: |
+          KanbanStatus inherits str so it is JSON-serialisable without extra config and
+          maps directly to a SQLAlchemy String column (no need for Enum column type).
+          title field_validator: MUST strip whitespace first, then raise ValueError if empty;
+          return stripped string — `return v.strip()` NOT `return v`.
+          description field_validator: strip whitespace and return stripped; no error if empty.
+          CardCreate.status defaults to KanbanStatus.backlog — not required on creation.
+          MoveRequest.status is required with no default.
+          All four types (KanbanStatus, CardCreate, Card, MoveRequest, BoardView) defined in
+          this single file.
+          ConfigDict is an import; model_config is a class attribute.
+      verification:
+        node: |
+          - pydantic rejects empty title
+          - accepts all three KanbanStatus values
+          - all types importable from app.schemas
+        edge: |
+          - Card schema field types match ORM column types: status↔String, position↔Integer, created_at↔DateTime
+      docs: |
+        - Central data contract
+        - KanbanStatus enum is the first enum type in this app family
+
+    db_connection:
+      kind: module
+      defines: "SQLAlchemy engine and session factory bound to kanban.db"
+      composed_of: [sqlalchemy, sqlite, python]
+      tier: 1
+      spec:
+        interface: |
+          - get_db() -> Generator[Session, None, None]
+        contract: |
+          DATABASE_URL = "sqlite:///./kanban.db"   # literal — do not use "app.db" or any other name
+          engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+          SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+          Base = declarative_base()
+          get_db() yields one Session per request; always closes on exit via try/finally.
+          Exports: engine, SessionLocal, Base, get_db
+      verification:
+        node: |
+          - engine.connect() succeeds
+          - session opens and closes without error
+        edge: |
+          - SQLite file created at expected path on first connection
+      docs: |
+        - FastAPI dependency — injected into every route via Depends(get_db)
+
+    orm_model:
+      kind: module
+      defines: "SQLAlchemy declarative model mapping Card to the cards table"
+      composed_of: [sqlalchemy, data_schema, db_connection]
+      tier: 2
+      spec:
+        interface: |
+          Imports: EXACTLY these two lines, in this order, nothing added, nothing
+          else touching app.schemas in any form:
+              from datetime import datetime
+              from sqlalchemy import Integer, String, DateTime, Column
+              from app.database import Base
+          No `from app.schemas import ...`, no `from app import schemas`, no
+          `import app.schemas`, no `# noqa` marker of any kind — this file has
+          no runtime dependency on app.schemas at all, only a conceptual one
+          (matching column types by hand, described below).
+
+          class CardModel(Base):
+            __tablename__ = "cards"
+            id:          Integer, primary_key=True, autoincrement
+            title:       String, not null
+            description: String, default ""
+            status:      String, not null, default "backlog"
+            position:    Integer, not null, default 0
+            created_at:  DateTime, default=datetime.utcnow
+
+          These are the ONLY SIX columns/attributes on this class. No other
+          fields, no ForeignKey, no relationship(), no back_populates — this
+          is a single-table model with zero relationships.
+        contract: |
+          status column is String (NOT SQLAlchemy Enum) because KanbanStatus inherits str;
+          store the .value of the enum ("backlog", "in_progress", "done").
+          position is Integer with default=0 (set on insert; not updated on move in this prototype).
+          created_at uses DateTime with default=datetime.utcnow.
+          Import Base from app.database — do NOT redefine Base here.
+          Import datetime from the stdlib `datetime` module for the column default.
+          column types match the Pydantic Card class in app/schemas.py by hand
+          (id: int, title: str, description: str, status: str, position: int,
+          created_at: datetime) — there is no class named "CardSchema" anywhere
+          in this app; the Pydantic class is named Card. Do not import it either
+          way — this is a description of what to match by hand, not an import
+          target.
+          data_schema (this node's dependency, app/schemas.py) is a Pydantic
+          module, NOT a database table — it defines request/response models
+          only, and CardModel must not reference it, or any other node name,
+          via ForeignKey/relationship() or via any import. CardModel has no
+          foreign keys and no relationships to any other table, full stop —
+          this component has only one table.
+      verification:
+        node: |
+          - create_all() creates table
+          - insert + select roundtrip preserves all fields including status string
+        edge: |
+          - CardModel columns map 1:1 to Card Pydantic schema field types
+      docs: |
+        - Single source of truth for DB schema
+        - status stored as plain string
+
+    crud_operations:
+      kind: module
+      defines: "Row-level functions: get_cards, create_card, move_card, delete_card"
+      composed_of: [orm_model, db_connection, data_schema]
+      tier: 3
+      spec:
+        interface: |
+          Imports: from app.schemas import Card, CardCreate, MoveRequest — EXACTLY
+          these class names. There is no CardRead/CardOut/CardResponse/CardDTO —
+          the Pydantic response model is named Card.
+
+          get_cards(db: Session) -> list[Card]
+          create_card(db: Session, item: CardCreate) -> Card
+          move_card(db: Session, id: int, req: MoveRequest) -> Card
+          delete_card(db: Session, id: int) -> None
+        contract: |
+          get_cards: query all cards ordered by position ASC; return list of Card Pydantic models.
+          create_card: CardModel(title=item.title, description=item.description,
+            status=item.status.value, position=0); db.add(); db.commit(); db.refresh();
+            return Card.model_validate(row).
+          move_card: query by id; if not found raise HTTPException(404, "Card not found");
+            set row.status = req.status.value; db.commit(); db.refresh(); return Card.model_validate(row).
+          delete_card: query by id; if not found raise HTTPException(404, "Card not found");
+            db.delete(row); db.commit(); return None.
+          Use `from sqlalchemy.orm import Session` for the type annotation.
+          Use HTTPException from fastapi — the only FastAPI import in this file.
+          Do NOT import or redefine get_db here.
+          Store status as string value (row.status = req.status.value), not the enum object.
+      verification:
+        node: |
+          - pytest with in-memory SQLite: each function tested
+          - 404 raised on unknown id
+        edge: |
+          - returned Card models pass Pydantic validation
+          - status field is a valid KanbanStatus string
+      docs: |
+        - Pure data layer — one responsibility: row-level CRUD on the cards table
+
+    board_view:
+      kind: module
+      defines: "Grouping function: splits all cards into the three column lists"
+      composed_of: [orm_model, db_connection, data_schema]
+      tier: 3
+      spec:
+        interface: |
+          get_board(db: Session) -> BoardView
+        contract: |
+          Fetch all cards ordered by position ASC:
+            rows = db.query(CardModel).order_by(CardModel.position).all()
+          Group into three lists by status string value:
+            backlog    = [Card.model_validate(r) for r in rows if r.status == "backlog"]
+            in_progress = [Card.model_validate(r) for r in rows if r.status == "in_progress"]
+            done       = [Card.model_validate(r) for r in rows if r.status == "done"]
+          Return BoardView(backlog=backlog, in_progress=in_progress, done=done).
+          Single DB query; grouping in Python — no SQL GROUP BY.
+          If no cards exist, returns BoardView(backlog=[], in_progress=[], done=[]).
+          Import BoardView and Card from app.schemas; import CardModel from app.models.
+      verification:
+        node: |
+          - seeded cards in different statuses → get_board returns each in correct list
+          - empty DB → all three lists empty
+        edge: |
+          - returned BoardView passes Pydantic validation
+          - cards appear in exactly one list each
+      docs: |
+        - Read-only grouping layer
+        - no mutations
+        - board grouping in Python not SQL
+
+    api_routes:
+      kind: module
+      defines: "FastAPI app exposing board view, card CRUD, and move as REST endpoints"
+      composed_of: [fastapi, crud_operations, board_view, data_schema]
+      tier: 4
+      ports:
+        get_board:
+          signature: "GET /board -> BoardView"
+          kind: call
+          direction: out
+        list_cards:
+          signature: "GET /cards -> Card[]"
+          kind: call
+          direction: out
+        create_card:
+          signature: "POST /cards (title: string, description?: string, status?: KanbanStatus) -> Card"
+          kind: call
+          direction: out
+        move_card:
+          signature: "PUT /cards/{id}/move (status: KanbanStatus) -> Card"
+          kind: call
+          direction: out
+        delete_card:
+          signature: "DELETE /cards/{id} -> void"
+          kind: call
+          direction: out
+      spec:
+        interface: |
+          Imports: from app.schemas import Card, CardCreate, MoveRequest, BoardView —
+          EXACTLY these class names. There is no CardRead/CardOut/CardResponse/CardDTO.
+
+          GET    /board              -> BoardView
+          GET    /cards              -> list[Card]
+          POST   /cards              -> Card  (status_code=201)
+          PUT    /cards/{id}/move    -> Card
+          DELETE /cards/{id}         -> None  (status_code=204)
+        contract: |
+          CORS enabled for the frontend origin — import FRONTEND_VITE_PORT from
+          app.config and build allow_origins=[f"http://localhost:{FRONTEND_VITE_PORT}"];
+          do NOT hardcode the port number (allow_methods=["*"], allow_headers=["*"]).
+          Use CORSMiddleware from fastapi.middleware.cors.
+          Pydantic validates all request bodies; 404 propagated from crud_operations and board_view.
+          MUST import the models module: `from app import models` so SQLAlchemy registers CardModel
+          with Base BEFORE calling create_all.
+          MUST call Base.metadata.create_all(bind=engine) at module level (after imports, before
+          app = FastAPI()) — omitting this causes OperationalError: no such table: cards.
+          MUST import get_db from app.database — NEVER redefine get_db locally.
+          POST /cards: body is CardCreate; call create_card(db, item); return with status_code=201.
+          PUT /cards/{id}/move: body is MoveRequest; call move_card(db, id, req); return Card.
+          DELETE /cards/{id}: call delete_card(db, id); return Response(status_code=204).
+          GET /board: call get_board(db); return BoardView.
+          No route ordering ambiguity — /board and /cards/{id}/move are on different paths.
+      verification:
+        node: |
+          - pytest TestClient: all five endpoints return correct status + response shape
+          - board groups correctly
+        edge: |
+          - CORS headers present
+          - KanbanStatus enum values accepted and rejected correctly
+      docs: |
+        - Backend public surface — frontend api_client validated against this contract
+
+    readme:
+      kind: doc
+      defines: "README.md: setup, run, and test instructions for this backend"
+      composed_of: [api_routes]
+      tier: 5
+      spec:
+        interface: |
+          Output: README.md at the component root (NOT under app/) — plain Markdown, not code.
+          Do NOT follow the Python/FastAPI code-style conventions above for this file; those apply
+          to source files only. This file is prose documentation.
+        contract: |
+          Must include, as Markdown sections:
+          - Title + one-paragraph description of what this backend does
+          - Prerequisites: Python version, how to install dependencies (pip install -r requirements.txt
+            or equivalent — infer from the primitives above: fastapi, sqlalchemy, pydantic, sqlite)
+          - Running the server: exact command to start it (uvicorn app.main:app --reload --port 8002)
+            and the default URL/port (http://localhost:8002, OpenAPI docs at /docs)
+          - Running tests: exact command (pytest tests/)
+          - API summary: list each endpoint from api_routes' ports below with method, path, and
+            one-line purpose
+        content_outline: |
+          # <Component name>
+          One paragraph description.
+          ## Prerequisites
+          ## Running the server
+          ## Running tests
+          ## API endpoints
+      verification:
+        node: |
+          - README.md exists at component root
+          - contains headings for prerequisites, running the server, running tests, and API endpoints
+      docs: |
+        - Generated last, after all code nodes, so it can describe the actual generated API surface
+        - Not verified against the code (kind: doc nodes skip compile/edge-symbol checks — see
+          spl/tools.py verify_node/verify_edges)
+
+function:
+  exports:
+    - name: get_board
+      kind: port
+      from: api_routes.get_board
+      signature: "GET /board -> BoardView"
+    - name: list_cards
+      kind: port
+      from: api_routes.list_cards
+      signature: "GET /cards -> Card[]"
+    - name: create_card
+      kind: port
+      from: api_routes.create_card
+      signature: "POST /cards (title: string, description?: string, status?: KanbanStatus) -> Card"
+    - name: move_card
+      kind: port
+      from: api_routes.move_card
+      signature: "PUT /cards/{id}/move (status: KanbanStatus) -> Card"
+    - name: delete_card
+      kind: port
+      from: api_routes.delete_card
+      signature: "DELETE /cards/{id} -> void"
+      comment: |
+        The five exports above are the OpenAPI contract that frontend.graph.yaml
+        imports and binds api_client calls against — see frontend.graph.yaml's
+        function.calls for the consumer side of each contract.
+
+verification:
+  - node: data_schema
+    backend: pytest
+    tests: tests/test_schemas.py
+  - node: crud_operations
+    backend: pytest
+    tests: tests/test_crud.py
+  - node: board_view
+    backend: pytest
+    tests: tests/test_board.py
+  - node: api_routes
+    backend: pytest
+    tests: tests/test_routes.py
+    comment: |
+      - 404 on unknown id
+      - board grouping correct
+      - CORS headers present

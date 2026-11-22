@@ -1,0 +1,366 @@
+# ── Unified Duality Graph Schema v2.1 — Integrated Profile (Graph of Graphs) ─
+# Migrated from graph-driven-workflow/apps/SPL/conduit/system.yaml
+#
+# Same imports:-based composition as apps/todo/blueprint/main.graph.yaml — the
+# two component graphs stay independent files, pulled in declaratively.
+# Largest system graph ported so far: 7 sub-applications plus a capstone
+# spanning the full RealWorld ("Conduit") golden path — register, publish,
+# follow, favorite, comment.
+domain: software/apps/conduit
+target_languages: [python, typescript]
+comment: |
+  Conduit RealWorld clone: JWT auth, social articles (CRUD + tags + favorites
+  + comments), follow/unfollow profiles. Vue.js frontend + FastAPI backend +
+  SQLite storage. The most structurally complex ported app — auth-gated
+  everywhere, two junction-table many-to-many relationships (follows,
+  favorites), a string-tag pattern (articles_to_tags), and per-request
+  computed fields (following, favorited, favoritesCount) on almost every
+  response.
+capstone: publish_and_engage
+
+# Source of truth for id/version/domain_type — see
+# docs/DEV/BUILD/refactoring-plan-v1.md §1.1.
+blueprint:
+  id: conduit_app
+  schema_version: "2.2"
+  graph_schema_version: "2.1"
+  domain_type: integrated
+  provenance: authored
+  parent_blueprint: null
+  lineage: []
+
+imports:
+  - id: backend
+    graph: ./backend.graph.yaml
+    comment: |
+      FastAPI REST API at :8007, OpenAPI schema at /docs, CORS enabled for
+      :5178. Mandatory — the frontend cannot function without it.
+  - id: frontend
+    graph: ./frontend.graph.yaml
+    comment: |
+      Vue.js SPA served by Vite at :5178. This top-level graph only needs both
+      components present to assemble the system-level applications.
+
+# ── Port configuration (system-level, orchestration metadata) ────────────────
+# Single source of truth, same convention as apps/todo/blueprint/main.graph.yaml's
+# ports: block; checked against each component's own `port:` field by
+# spl/tools.py's check_port_consistency() via integrate_system.spl. Chosen to
+# avoid collision with apps/fastapi/ (already on :8005, the port the conduit
+# source repo itself used) — every other ported app's backend port is already
+# taken (8000/8001/8002/8003/8005/8006), so this app uses :8007. Frontend
+# keeps the source's own :5178 (unclaimed by any other ported app).
+ports:
+  backend: ${{ settings.BACKEND_FASTAPI_PORT }}
+  frontend: ${{ settings.FRONTEND_VITE_PORT }}
+
+form:
+  nodes:
+    conduit_app_shell:
+      kind: component
+      defines: "System integration shell: frontend at :5178 consuming backend REST API at :8007 via CORS"
+      tier: 1
+      depends_on: [backend, frontend]
+      comment: |
+        frontend depends on backend's JWT-secured REST API; every write
+        operation and most reads require or accept a bearer token issued by
+        the backend's auth_deps/security_module.
+
+    readme:
+      kind: doc
+      defines: "README.md: product-level overview, setup, and run instructions for the whole conduit app"
+      composed_of: [conduit_app_shell]
+      tier: 2
+      spec:
+        interface: |
+          Output: README.md at the system root (the same directory as this graph.yaml, or
+          --output_dir when integrate_system.spl was run with one) — plain Markdown, not code.
+        contract: |
+          Must include, as Markdown sections:
+          - Title + one-paragraph description (Conduit RealWorld clone: JWT auth, social
+            articles with tags/favorites/comments, follow/unfollow profiles)
+          - Architecture: frontend (:5178) calls backend (:8007) over REST, CORS enabled,
+            JWT bearer auth — one sentence, link to each component's own README.md for its
+            own setup/run/test instructions rather than repeating them
+          - Running the full system: build it (`spl3 run spl/build_app.spl ...`), then
+            start backend and frontend together
+          - Applications: one line per application from this graph's `applications:` block
+          CRITICAL: this app's domain is users/profiles/articles/comments/tags/follows —
+          do NOT mention todos, expenses, kanban cards, recipes, or items, which are
+          unrelated sibling apps in this same repo.
+        content_outline: |
+          # <App name>
+          One paragraph description.
+          ## Architecture
+          ## Running the full system
+          ## Applications
+      verification:
+        node: |
+          - README.md exists at the system root
+          - contains headings for architecture, running the full system, and applications
+      docs: |
+        - Same convention as apps/todo/blueprint/main.graph.yaml's readme node — generated
+          last by integrate_system.spl with real pass/fail results embedded
+
+function:
+  exports:
+    - name: publish_and_engage
+      kind: port
+      from: conduit_app_shell.main
+      signature: "() -> void"
+      comment: |
+        Single entry point. Serves the frontend, starts the backend, and wires
+        CORS + JWT auth between them. The system capstone — every node in both
+        component graphs exists in service of this workflow.
+
+# ── System-level applications ────────────────────────────────────────────────
+# Migrated verbatim (same defines/user_story/contract text) from the source
+# system.yaml's applications: block — already system-level, cross-component
+# use cases; only the needs: mapping was adjusted to name real node ids from
+# the migrated backend.graph.yaml / frontend.graph.yaml.
+#
+# CRITICAL, applies to every application's acceptance test below: "Conduit"
+# is the name of a very well-known, extremely well-documented open-source
+# reference API (the RealWorld example app spec: https://realworld-docs.org).
+# THIS backend is a from-scratch GDW implementation inspired by that spec but
+# DELIBERATELY DOES NOT MATCH ITS EXACT WIRE FORMAT. Concretely, vs the
+# canonical RealWorld API:
+#   - NO "/api" prefix on any route — routes are /users, /articles, /tags,
+#     etc., not /api/users, /api/articles.
+#   - Request AND response bodies are FLAT, never wrapped in an envelope —
+#     POST /users body is exactly {"username":..., "email":..., "password":...},
+#     NOT {"user": {"username":..., ...}}. The response is exactly
+#     {"username":..., "email":..., "bio":..., "image":..., "token":...},
+#     NOT {"user": {...}}.
+#   - Auth header is `Authorization: Bearer <token>` — NOT `Authorization:
+#     Token <token>` (the canonical RealWorld scheme).
+#   - No trailing slash on any route (see backend.graph.yaml's api_routes
+#     node for the exact, complete list of all 18 routes).
+# When writing an acceptance test, use ONLY the paths/shapes given in each
+# application's own contract below — do NOT fall back on prior knowledge of
+# what a "Conduit" or "RealWorld" API conventionally looks like, even though
+# that prior is very strong; it does not apply to this implementation.
+applications:
+
+  register_and_login:
+    defines: |
+      - New user registers and logs in
+      - receives JWT token
+    needs:
+      backend: [user_crud]
+      frontend: [LoginForm]
+    tier: 1
+    spec:
+      user_story: |
+        - As a visitor I can create an account and receive a token to authenticate future requests
+      contract: |
+        - POST /users -> 201 + UserResponse with token
+        - POST /users/login -> UserResponse with token
+        - duplicate username/email -> 400
+        - Exact request body for POST /users: {"username": ..., "email": ..., "password": ...}
+          — flat, top-level fields, NOT wrapped in {"user": {...}}.
+        - Exact request body for POST /users/login: {"email": ..., "password": ...} — flat.
+        - Exact response body (both endpoints): {"username": ..., "email": ..., "bio": ...,
+          "image": ..., "token": ...} — flat, NOT wrapped in {"user": {...}}. The token is
+          at response["token"], not response["user"]["token"].
+    verification: |
+      - e2e: POST /users with unique username+email -> 201 + token
+      - login with same credentials -> token
+      - duplicate register -> 400
+    docs: |
+      - Entry point
+      - validates auth flow
+
+  browse_articles:
+    defines: |
+      - User browses the global article feed (public, no auth required)
+    needs:
+      backend: [article_crud]
+      frontend: [ArticleList]
+    tier: 1
+    spec:
+      user_story: |
+        - As a visitor I can see all articles without logging in
+      contract: |
+        - GET /articles -> ArticleListResponse with articles + articlesCount
+        - empty DB -> articlesCount=0
+        - no auth required
+    verification: |
+      - e2e: unauthenticated GET /articles -> 200 + ArticleListResponse
+      - favorited=false for all articles
+    docs: |
+      - Validates optional auth path
+      - public read
+
+  filter_by_tag:
+    defines: |
+      - User clicks a tag in sidebar
+      - article list filters to matching articles
+    needs:
+      backend: [article_crud]
+      frontend: [TagSidebar]
+    tier: 1
+    spec:
+      user_story: |
+        - As a user I can narrow the article list by tag
+      contract: |
+        - GET /articles?tag=python -> only articles with tag 'python'
+        - GET /tags -> list of all used tags
+        - Test setup: creating an article requires an authenticated user — first POST /users
+          (or /users/login) to obtain a token, then POST /articles with header
+          `Authorization: Bearer <token>` (NOT `Authorization: Token <token>`). Request body:
+          {"title": ..., "description": ..., "body": ..., "tagList": [...]} — flat, and the
+          tag field is named "tagList" (a list under the article body), NOT a separate "tags"
+          field and NOT a top-level parameter to the create call.
+        - POST /articles has no trailing slash: POST /articles, not POST /articles/.
+    verification: |
+      - e2e: create 2 articles (1 tagged 'python', 1 tagged 'rust') -> GET /articles?tag=python -> 1 article
+    docs: |
+      - Validates string tag filter
+      - GET /tags endpoint
+
+  create_and_view_article:
+    defines: |
+      - Authenticated user creates an article
+      - any user can view it
+    needs:
+      backend: [article_crud]
+      frontend: [ArticleForm]
+    tier: 1
+    spec:
+      user_story: |
+        - As an author I can publish an article identified by a slug
+      contract: |
+        - POST /articles -> 201 + ArticleResponse with slug
+        - GET /articles/{slug} -> same ArticleResponse
+        - slug derived from title via slugify
+        - POST /articles requires authentication: first register (POST /users, flat body
+          {"username":...,"email":...,"password":...}) or log in (POST /users/login) to get a
+          token from the flat response {"token": ...}, then send header
+          `Authorization: Bearer <token>` on the POST /articles request. Omitting the header
+          returns 401.
+        - Request body for POST /articles: {"title": ..., "description": ..., "body": ...,
+          "tagList": [...]} — flat.
+    verification: |
+      - e2e: create article 'Hello World' -> slug='hello-world'
+      - GET /articles/hello-world -> same article
+    docs: |
+      - Validates slug generation and retrieval
+
+  favorite_article:
+    defines: |
+      - Authenticated user favorites an article
+      - favoritesCount increments
+    needs:
+      backend: [article_crud]
+      frontend: [ArticleCard]
+    tier: 1
+    spec:
+      user_story: |
+        - As a reader I can mark articles I like
+        - the author sees how many favorites
+      contract: |
+        - POST /articles/{slug}/favorite -> ArticleResponse with favorited=true + incremented favoritesCount
+        - DELETE -> favorited=false + decremented
+        - Test setup fixture (POST /articles body): exactly {title, description, body,
+          tagList} — the article-creation request body does NOT accept a "favorited" or
+          "favoritesCount" field; those are server-computed response-only fields.
+    verification: |
+      - e2e: user A creates article
+      - user B favorites it -> GET /articles/{slug} with user B token -> favorited=true, favoritesCount=1
+    docs: |
+      - Validates M2M favorites
+      - per-user favorited flag
+
+  comment_on_article:
+    defines: |
+      - Authenticated user adds a comment
+      - all users can read comments
+    needs:
+      backend: [article_crud]
+      frontend: [ArticleDetail]
+    tier: 1
+    spec:
+      user_story: |
+        - As a reader I can add a comment and see others' comments
+      contract: |
+        - POST /articles/{slug}/comments -> 201 + CommentResponse
+        - GET /articles/{slug}/comments -> CommentListResponse
+        - DELETE /articles/{slug}/comments/{id} -> 204
+        - Test setup: register via POST /users (flat body {"username":...,"email":...,
+          "password":...}, NOT wrapped in {"user": {...}}) -> flat response {"token": ...}
+          (not response["user"]["token"]). No "/api" prefix on any route. Send the token as
+          `Authorization: Bearer <token>` (NOT `Authorization: Token <token>`) on POST
+          /articles, POST /articles/{slug}/comments, and DELETE /articles/{slug}/comments/{id}.
+        - Request body for POST /articles/{slug}/comments: {"body": ...} — flat, just the
+          comment text field, not wrapped in {"comment": {...}}.
+    verification: |
+      - e2e: create comment
+      - list comments -> appears
+      - delete -> removed
+      - list again -> empty
+    docs: |
+      - Validates comment sub-entity lifecycle
+
+  follow_and_feed:
+    defines: |
+      - User follows an author
+      - feed endpoint returns that author's articles
+    needs:
+      backend: [user_crud]
+      frontend: [ConduitApp]
+    tier: 1
+    spec:
+      user_story: |
+        - As a reader I can follow authors and see their articles in my personal feed
+      contract: |
+        - POST /profiles/{username}/follow -> ProfileResponse with following=true
+        - GET /articles/feed -> articles from followed authors only
+        - GET /articles/feed requires authentication (401 without a token) — it is NOT the
+          same route as GET /articles, which is publicly readable
+    verification: |
+      - e2e: user A creates article
+      - user B follows A
+      - B's feed -> A's article appears
+    docs: |
+      - Validates social follow graph
+      - feed subquery
+
+  publish_and_engage:
+    defines: |
+      - Full lifecycle: register, publish, follow, favorite, comment — the golden path
+    needs:
+      applications: [register_and_login, browse_articles, filter_by_tag,
+                     create_and_view_article, favorite_article, comment_on_article,
+                     follow_and_feed]
+    tier: 2
+    capstone: true
+    spec:
+      user_story: |
+        - As a user I can publish content, engage with others' content, and build a social presence
+      contract: |
+        golden path:
+          1. register user A (author)
+          2. register user B (reader)
+          3. A creates article "Hello World" with tagList=["python"]
+          4. B follows A -> ProfileResponse.following=true
+          5. B favorites the article -> favoritesCount=1
+          6. B adds comment "Great article!"
+          7. GET /articles/feed (as B) -> "Hello World" appears
+          8. GET /articles?tag=python -> "Hello World" appears
+          9. A deletes the article -> 204
+          10. GET /articles -> articlesCount=0
+          11. B's follow of A persists; DELETE /articles/{slug} does not remove follows
+    verification: |
+      - full lifecycle across all 7 sub-applications
+      - state consistent across reload
+    docs: |
+      - The capstone — every node exists in service of this workflow
+
+verification:
+  - node: conduit_app_shell
+    tool: integrate_system.spl
+    checks:
+      - CORS headers present on all backend responses
+      - all system applications pass acceptance tests against the live backend
+    docs: |
+      - README.md (product-level) — see the `readme` node above

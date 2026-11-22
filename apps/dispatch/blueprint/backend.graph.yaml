@@ -1,0 +1,603 @@
+# ── Unified Duality Graph Schema v2.1 — Software Profile ────────────────────
+# Migrated from graph-driven-workflow/apps/SPL/dispatch/components/backend/graph.yaml
+# (v1 primitives/concepts/tier schema -> form.primitives/form.nodes).
+domain: software/backend/fastapi
+target_languages: [python]
+comment: |
+  FastAPI backend: incident management core — priorities, severities, incident
+  types (reference data, all CRUD) plus incidents (FK-referenced, status-filtered
+  CRUD). Deliberately chosen as the second ported app, distinct in shape from
+  apps/todo/ (single-entity, 2-component CRUD): a single backend-only component
+  with 4 related entities, 3 foreign-key relationships, and status-enum filtering
+  — stress-tests the schema on a wider/deeper form.nodes DAG than todo exercises.
+capstone: api_routes
+
+tech_profile: python_fastapi
+port: ${{ settings.BACKEND_FASTAPI_PORT }}
+
+# Source of truth for id/version/domain_type — see
+# docs/DEV/BUILD/refactoring-plan-v1.md §1.1.
+blueprint:
+  id: dispatch_backend
+  schema_version: "2.2"
+  graph_schema_version: "2.1"
+  domain_type: software
+  provenance: authored
+  parent_blueprint: null
+  lineage: []
+
+form:
+  primitives:
+    python:
+      defines: "Python 3.11+ runtime and standard library"
+      tier: 0
+      kind: config
+    sqlite:
+      defines: "SQLite embedded relational database"
+      tier: 0
+      kind: config
+    fastapi:
+      defines: "FastAPI web framework: routing, dependency injection, OpenAPI"
+      tier: 0
+      kind: config
+    sqlalchemy:
+      defines: "SQLAlchemy 2.0 ORM: declarative models, FK relationships, session management"
+      tier: 0
+      kind: config
+    pydantic:
+      defines: "Pydantic v2: runtime data validation, field validators, from_attributes"
+      tier: 0
+      kind: config
+    slugify:
+      defines: "python-slugify: convert IncidentType.name to a URL-safe slug"
+      tier: 0
+      kind: config
+
+  nodes:
+    requirements:
+      kind: doc
+      defines: "requirements.txt: pinned pip dependencies for this backend"
+      composed_of: [python, sqlite, fastapi, sqlalchemy, pydantic, slugify]
+      tier: 1
+      spec:
+        interface: |
+          Output: requirements.txt at the component root (NOT under app/) — plain pip
+          requirements format, one package per line, not Python code.
+        contract: |
+          List the pip packages needed to install and run this backend, with minimum-version
+          pins (>=). Include:
+          - fastapi, sqlalchemy, pydantic, python-slugify (from the primitives above — pip
+            package name for the slugify primitive is python-slugify, not slugify)
+          - uvicorn[standard] — needed to run the server (uvicorn app.main:app), even though
+            it is not one of the primitives above and is never imported directly
+          - pytest, httpx — needed to run this component's test suite
+          One package per line, e.g. `fastapi>=0.111.0`. No comments, no section headers,
+          no pip install command — just the requirements.txt file content itself.
+      verification:
+        node: |
+          - requirements.txt exists at component root
+          - contains fastapi, sqlalchemy, pydantic, python-slugify, uvicorn, pytest, httpx
+      docs: |
+        - Generated early (depends only on primitives), same convention as apps/todo/blueprint/backend.graph.yaml
+
+    data_schema:
+      kind: concept
+      defines: "All Pydantic schemas for priorities, severities, incident types, and incidents"
+      composed_of: [pydantic, python]
+      tier: 1
+      spec:
+        interface: |
+          from enum import Enum
+          from pydantic import BaseModel, ConfigDict, field_validator
+
+          class IncidentStatus(str, Enum):
+              active = "Active"
+              stable = "Stable"
+              closed = "Closed"
+
+          # ── Priority ─────────────────────────────────────────────────────────
+          class PriorityBase(BaseModel):
+              name: str
+              description: str | None = None
+              color: str | None = None
+              enabled: bool = True
+              view_order: int = 9999
+              default: bool = False
+
+          class PriorityCreate(PriorityBase): ...   # name: strip + reject empty
+          class PriorityUpdate(BaseModel):
+              name: str | None = None
+              description: str | None = None
+              color: str | None = None
+              enabled: bool | None = None
+              view_order: int | None = None
+              default: bool | None = None
+          class PriorityRead(PriorityBase):
+              model_config = ConfigDict(from_attributes=True)
+              id: int
+
+          # ── Severity ─────────────────────────────────────────────────────────
+          # Same shape as Priority (Base/Create/Update/Read), fields identical.
+
+          # ── IncidentType ──────────────────────────────────────────────────────
+          class IncidentTypeBase(BaseModel):
+              name: str
+              slug: str | None = None    # auto-generated from name via slugify if not provided
+              description: str | None = None
+              enabled: bool = True
+              default: bool = False
+              visibility: str = "Open"
+          # IncidentTypeCreate/Update/Read follow the same Base/Create/Update/Read pattern.
+
+          # ── Incident ──────────────────────────────────────────────────────────
+          class IncidentBase(BaseModel):
+              title: str
+              name: str | None = None
+              description: str | None = None
+              status: IncidentStatus = IncidentStatus.active
+
+          class IncidentCreate(IncidentBase):
+              type_id: int
+              priority_id: int
+              severity_id: int
+              # title: strip + reject empty via field_validator
+
+          class IncidentUpdate(BaseModel):
+              title: str | None = None
+              name: str | None = None
+              description: str | None = None
+              status: IncidentStatus | None = None
+              type_id: int | None = None
+              priority_id: int | None = None
+              severity_id: int | None = None
+
+          class IncidentRead(IncidentBase):
+              model_config = ConfigDict(from_attributes=True)
+              id: int
+              type_id: int
+              priority_id: int
+              severity_id: int
+              priority: PriorityRead
+              severity: SeverityRead
+              incident_type: IncidentTypeRead
+        contract: |
+          IncidentStatus enum values: "Active", "Stable", "Closed".
+          PriorityCreate.name / SeverityCreate.name / IncidentTypeCreate.name: strip + reject
+          empty via field_validator, same pattern as apps/todo/blueprint/backend.graph.yaml's
+          todo_schema.title validator.
+          IncidentCreate.title: strip + reject empty via field_validator.
+          IncidentTypeCreate.slug: if None, crud will call slugify(name) before persisting —
+          this schema does not generate the slug itself, orm_model/reference_crud does.
+          IncidentRead.priority / .severity / .incident_type: nested read schemas populated via
+          ORM relationship — requires from_attributes=True and relationships defined in
+          orm_model. All Update schemas use optional fields (partial update pattern).
+      verification:
+        node: |
+          - all schema classes importable
+          - IncidentStatus enum has exactly 3 values
+          - IncidentRead with nested priority/severity/incident_type validates from an ORM object
+          - empty name/title rejected on Priority/Severity/IncidentType/Incident Create schemas
+        edge: |
+          - IncidentRead.priority is PriorityRead
+          - IncidentRead.severity is SeverityRead
+          - IncidentRead.incident_type is IncidentTypeRead
+      docs: |
+        - Central data contract shared by the ORM layer and API routes, same role as
+          apps/todo/blueprint/backend.graph.yaml's todo_schema but across 4 related entities
+
+    db_connection:
+      kind: module
+      defines: "SQLAlchemy 2.0 engine, declarative Base, get_db dependency, SessionDep"
+      composed_of: [sqlalchemy, sqlite, python]
+      tier: 1
+      spec:
+        interface: |
+          from typing import Annotated
+          from fastapi import Depends
+          from sqlalchemy import create_engine
+          from sqlalchemy.orm import DeclarativeBase, Session
+
+          SQLALCHEMY_DATABASE_URL = "sqlite:///./dispatch.db"
+          engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False})
+
+          class Base(DeclarativeBase):
+              pass
+
+          def get_db():
+              with Session(engine) as session:
+                  yield session
+
+          SessionDep = Annotated[Session, Depends(get_db)]
+        contract: |
+          SQLAlchemy 2.0 style: DeclarativeBase subclass (not declarative_base()).
+          get_db yields a Session via context manager; no explicit session.close() needed.
+          SessionDep is the FastAPI dependency annotation used in route signatures.
+          DB file: dispatch.db in the working directory (tests override via StaticPool).
+      verification:
+        node: |
+          - Base, engine, get_db, SessionDep importable
+          - Session yielded correctly
+        edge: |
+          - orm_model inherits from Base without re-importing create_engine
+      docs: |
+        - Same pattern as apps/todo/blueprint/backend.graph.yaml's db_connection
+
+    orm_model:
+      kind: module
+      defines: "4 SQLAlchemy ORM models: IncidentPriority, IncidentSeverity, IncidentType, Incident"
+      composed_of: [db_connection, sqlalchemy]
+      tier: 2
+      spec:
+        interface: |
+          from sqlalchemy import Boolean, Column, ForeignKey, Integer, String, UniqueConstraint
+          from sqlalchemy.orm import relationship
+          from app.database import Base
+
+          # Do NOT import anything from app.schemas (Pydantic) here. ORM models are
+          # independent of the Pydantic schemas — no schema class is referenced by
+          # name anywhere in this file's class bodies below.
+
+          class IncidentPriority(Base):
+              __tablename__ = "incident_priority"
+              __table_args__ = (UniqueConstraint("name"),)
+              id = Column(Integer, primary_key=True, autoincrement=True)
+              name = Column(String, nullable=False)
+              description = Column(String, nullable=True)
+              color = Column(String, nullable=True)
+              enabled = Column(Boolean, default=True, nullable=False)
+              view_order = Column(Integer, default=9999, nullable=False)
+              default = Column(Boolean, default=False, nullable=False)
+              incidents = relationship("Incident", back_populates="priority")
+
+          # IncidentSeverity: identical shape to IncidentPriority, table "incident_severity",
+          # back_populates="severity".
+
+          class IncidentType(Base):
+              __tablename__ = "incident_type"
+              __table_args__ = (UniqueConstraint("name"), UniqueConstraint("slug"))
+              id = Column(Integer, primary_key=True, autoincrement=True)
+              name = Column(String, nullable=False)
+              slug = Column(String, nullable=False)
+              description = Column(String, nullable=True)
+              enabled = Column(Boolean, default=True, nullable=False)
+              default = Column(Boolean, default=False, nullable=False)
+              visibility = Column(String, default="Open", nullable=False)
+              incidents = relationship("Incident", back_populates="incident_type")
+
+          class Incident(Base):
+              __tablename__ = "incident"
+              id = Column(Integer, primary_key=True, autoincrement=True)
+              name = Column(String, nullable=True)
+              title = Column(String, nullable=False)
+              description = Column(String, nullable=True)
+              status = Column(String, default="Active", nullable=False)
+              type_id = Column(Integer, ForeignKey("incident_type.id"), nullable=False)
+              priority_id = Column(Integer, ForeignKey("incident_priority.id"), nullable=False)
+              severity_id = Column(Integer, ForeignKey("incident_severity.id"), nullable=False)
+              incident_type = relationship("IncidentType", back_populates="incidents")
+              priority = relationship("IncidentPriority", back_populates="incidents")
+              severity = relationship("IncidentSeverity", back_populates="incidents")
+        contract: |
+          All 4 models inherit from Base (from app.database).
+          IncidentPriority and IncidentSeverity: name UNIQUE at DB level.
+          IncidentType: name UNIQUE + slug UNIQUE (two separate constraints).
+          Incident.status stores the enum value as a plain string ("Active"/"Stable"/"Closed").
+          Incident has 3 FK columns + 3 back_populates relationships.
+          CRITICAL: the relationship attribute on Incident for the type must be named
+          "incident_type" (not "type", a Python builtin) — IncidentRead.incident_type reads
+          from this exact attribute name.
+          back_populates pairs: Incident.priority <-> IncidentPriority.incidents, and the
+          equivalent for severity and incident_type.
+          SQLite-compatible only — no TSVectorType, no JSONB.
+          Do NOT import from app.schemas (the Pydantic module) in this file — SQLAlchemy
+          models never reference Pydantic classes; the two layers are connected only by
+          the field names/types matching, verified separately by data_schema'
+          contract, not by an import.
+      verification:
+        node: |
+          - all 4 models importable
+          - Incident.incident_type relationship navigates to IncidentType
+          - UniqueConstraints present on name (priority/severity) and name+slug (type)
+        edge: |
+          - Incident.priority is an IncidentPriority instance
+          - Incident.severity is an IncidentSeverity instance
+          - Incident.incident_type is an IncidentType instance
+      docs: |
+        - Single source of truth for the DB schema, same role as apps/todo/blueprint/backend.graph.yaml's
+          todo_orm_model but across 4 entities with FK relationships between them
+
+    reference_crud:
+      kind: module
+      defines: "CRUD functions for IncidentPriority, IncidentSeverity, and IncidentType"
+      composed_of: [orm_model, data_schema, slugify]
+      tier: 3
+      spec:
+        interface: |
+          from sqlalchemy.orm import Session
+          from slugify import slugify
+          from app.models import IncidentPriority, IncidentSeverity, IncidentType
+          from app.schemas import PriorityCreate, PriorityUpdate, SeverityCreate, SeverityUpdate
+          from app.schemas import IncidentTypeCreate, IncidentTypeUpdate
+
+          # ── Priority ─────────────────────────────────────────────────────────
+          def get_priority(session: Session, priority_id: int) -> IncidentPriority | None: ...
+          def list_priorities(session: Session) -> list[IncidentPriority]: ...
+          def create_priority(session: Session, *, priority_in: PriorityCreate) -> IncidentPriority: ...
+          def update_priority(session: Session, *, db_priority: IncidentPriority, priority_in: PriorityUpdate) -> IncidentPriority: ...
+          def delete_priority(session: Session, *, db_priority: IncidentPriority) -> None: ...
+
+          # ── Severity: get_severity/list_severities/create_severity/update_severity/delete_severity,
+          #   identical shape to the Priority functions above.
+
+          # ── IncidentType ──────────────────────────────────────────────────────
+          def get_incident_type(session: Session, type_id: int) -> IncidentType | None: ...
+          def list_incident_types(session: Session) -> list[IncidentType]: ...
+          def create_incident_type(session: Session, *, type_in: IncidentTypeCreate) -> IncidentType: ...
+          def update_incident_type(session: Session, *, db_type: IncidentType, type_in: IncidentTypeUpdate) -> IncidentType: ...
+          def delete_incident_type(session: Session, *, db_type: IncidentType) -> None: ...
+        contract: |
+          All three resources follow the same CRUD shape: get by id, list all, create, update, delete.
+          create_priority / create_severity: set fields from *_in.model_dump(); session.add();
+          session.commit(); session.refresh(); return.
+          create_incident_type: if type_in.slug is None, generate via
+          slugify(type_in.name, max_length=250); else use the provided slug.
+          update_*: apply only non-None fields from *_in (partial update); session.commit();
+          session.refresh(); return.
+          update_incident_type: if name changes and slug not provided, regenerate the slug.
+          delete_*: session.delete(db_*); session.commit(). No return value.
+          list_*: session.query(Model).all()
+          No uniqueness pre-checks here — uniqueness enforced at DB level (IntegrityError
+          propagates if violated); route layer does not need to pre-validate.
+      verification:
+        node: |
+          - all 15 functions importable
+          - create_incident_type generates a slug from name when slug is None
+          - update applies only the partial fields provided
+          - delete removes the row from the DB
+        edge: |
+          - create_priority uses the IncidentPriority model from orm_model
+          - create_incident_type uses the IncidentType model from orm_model
+          - session is committed after each mutating call
+      docs: |
+        - Pure data layer for the 3 reference-data resources — no FastAPI imports, testable
+          without starting a server, same convention as apps/todo/blueprint/backend.graph.yaml's
+          crud_operations
+
+    incident_crud:
+      kind: module
+      defines: "CRUD functions for Incident: FK existence checks, status-based filtering"
+      composed_of: [orm_model, data_schema, reference_crud]
+      tier: 4
+      spec:
+        interface: |
+          from fastapi import HTTPException
+          from sqlalchemy.orm import Session
+          from app.models import Incident
+          from app.schemas import IncidentCreate, IncidentStatus, IncidentUpdate
+
+          def get_incident(session: Session, incident_id: int) -> Incident | None: ...
+          def list_incidents(session: Session, *, status: IncidentStatus | None = None) -> list[Incident]: ...
+          def create_incident(session: Session, *, incident_in: IncidentCreate) -> Incident: ...
+          def update_incident(session: Session, *, db_incident: Incident, incident_in: IncidentUpdate) -> Incident: ...
+          def delete_incident(session: Session, *, db_incident: Incident) -> None: ...
+        contract: |
+          get_incident: session.query(Incident).filter(Incident.id == incident_id).first()
+          list_incidents: if status is None -> all incidents; else filter Incident.status == status.value
+          create_incident: validate FK targets exist BEFORE inserting:
+            - session.get(IncidentType, incident_in.type_id) -> raise HTTPException(404) if None
+            - session.get(IncidentPriority, incident_in.priority_id) -> raise HTTPException(404) if None
+            - session.get(IncidentSeverity, incident_in.severity_id) -> raise HTTPException(404) if None
+            - then: db_incident = Incident(**incident_in.model_dump()); session.add();
+              session.commit(); session.refresh()
+            - status stored as incident_in.status.value (string "Active", not the enum instance)
+          update_incident: for each non-None field in incident_in.model_dump(exclude_none=True):
+            - if field is "status": store .value (convert enum to string)
+            - if field is "type_id"/"priority_id"/"severity_id": validate the new FK target
+              exists first (404 if not)
+            - setattr(db_incident, field, value); session.commit(); session.refresh()
+          delete_incident: session.delete(db_incident); session.commit()
+          CRITICAL: after session.refresh(), SQLAlchemy populates db_incident.priority,
+          db_incident.severity, db_incident.incident_type relationships automatically —
+          these are required for IncidentRead's nested schema serialization; do not manually
+          re-query them.
+      verification:
+        node: |
+          - create with a missing type_id/priority_id/severity_id raises 404
+          - list with a status filter returns only matching incidents
+          - update to status persists as a plain string, not an enum repr
+          - delete removes the row
+        edge: |
+          - create_incident resolves all 3 FKs via session.get() against orm_model
+          - the returned Incident has populated .priority/.severity/.incident_type relationship
+            attributes (needed downstream by api_routes' IncidentRead serialization)
+      docs: |
+        - FK validation is the genuinely novel structural feature this app exercises that
+          apps/todo/blueprint/backend.graph.yaml never needed — 3 separate 404-before-insert
+          checks against 3 different reference tables, all before a single row is written
+
+    api_routes:
+      kind: module
+      defines: "FastAPI app with 4 routers (priorities, severities, incident-types, incidents), CORS, startup create_all"
+      composed_of: [incident_crud, reference_crud, data_schema, db_connection, orm_model]
+      tier: 5
+      ports:
+        list_priorities:
+          signature: "GET /api/v1/priorities -> PriorityRead[]"
+          kind: call
+          direction: out
+        create_priority:
+          signature: "POST /api/v1/priorities -> PriorityRead"
+          kind: call
+          direction: out
+        list_severities:
+          signature: "GET /api/v1/severities -> SeverityRead[]"
+          kind: call
+          direction: out
+        create_severity:
+          signature: "POST /api/v1/severities -> SeverityRead"
+          kind: call
+          direction: out
+        list_incident_types:
+          signature: "GET /api/v1/incident-types -> IncidentTypeRead[]"
+          kind: call
+          direction: out
+        create_incident_type:
+          signature: "POST /api/v1/incident-types -> IncidentTypeRead"
+          kind: call
+          direction: out
+        list_incidents:
+          signature: "GET /api/v1/incidents?status= -> IncidentRead[]"
+          kind: call
+          direction: out
+        create_incident:
+          signature: "POST /api/v1/incidents -> IncidentRead"
+          kind: call
+          direction: out
+        update_incident:
+          signature: "PUT /api/v1/incidents/{id} -> IncidentRead"
+          kind: call
+          direction: out
+      spec:
+        interface: |
+          from fastapi import FastAPI, HTTPException
+          from fastapi.middleware.cors import CORSMiddleware
+          from fastapi.responses import Response
+
+          app = FastAPI(title="Dispatch Incident Core", version="0.1.0")
+          app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True,
+                             allow_methods=["*"], allow_headers=["*"])
+
+          @app.on_event("startup")
+          def on_startup():
+              from app.database import engine, Base
+              import app.models  # ensure models registered before create_all
+              Base.metadata.create_all(bind=engine)
+
+          # Priorities router (prefix /api/v1/priorities): GET list, POST (201), GET/{id} (200/404),
+          #   PUT/{id} (200/404), DELETE/{id} (204)
+          # Severities router (prefix /api/v1/severities): same 5-route shape as priorities
+          # Incident Types router (prefix /api/v1/incident-types): same 5-route shape
+          # Incidents router (prefix /api/v1/incidents): GET list (?status= optional filter),
+          #   POST (201), GET/{id} (200/404), PUT/{id} (200/404), DELETE/{id} (204)
+          # 20 routes total: 5 x 4 resources.
+        contract: |
+          4 APIRouter objects, each with its own prefix, included via app.include_router().
+          GET /incidents accepts an optional query param: status: IncidentStatus | None = None.
+          All 5 DELETE routes per resource return Response(status_code=204) with no body.
+          All POST routes use status_code=201.
+          404 pattern: if get_*(session, id) returns None -> raise HTTPException(status_code=404,
+          detail="...").
+          MUST import app.models inside on_startup to force model registration with Base before
+          create_all — same requirement as apps/todo/blueprint/backend.graph.yaml's api_routes.
+          Do NOT use lifespan= — use @app.on_event("startup") for TestClient compatibility.
+          CORS: allow_origins=["*"], all methods + headers (no fixed frontend origin to
+          allow-list, since this app is backend-only).
+      verification:
+        node: |
+          - app starts
+          - /docs accessible
+          - all 20 routes registered
+          - startup creates all 4 tables
+          - CORS headers present
+        edge: |
+          - routes call reference_crud and incident_crud with the correct session
+          - POST returns 201, DELETE returns 204 with no body
+          - GET /incidents?status= filters correctly
+      docs: |
+        - The backend's public surface — 20 routes across 4 resources, wider than
+          apps/todo/blueprint/backend.graph.yaml's 4-route single-entity surface
+
+    readme:
+      kind: doc
+      defines: "README.md: setup, run, and test instructions for this backend"
+      composed_of: [api_routes]
+      tier: 6
+      spec:
+        interface: |
+          Output: README.md at the component root (NOT under app/) — plain Markdown, not code.
+          Do NOT follow the Python/FastAPI code-style conventions above for this file; those
+          apply to source files only.
+        contract: |
+          Must include, as Markdown sections:
+          - Title + one-paragraph description of what this backend does
+          - Prerequisites: Python version, how to install dependencies
+          - Running the server: exact command (uvicorn app.main:app --reload) and default URL
+            (http://localhost:8006, OpenAPI docs at /docs)
+          - Running tests: exact command (pytest tests/)
+          - API summary: list each endpoint from api_routes' ports below, grouped by resource
+            (priorities, severities, incident-types, incidents), with method, path, and one-line
+            purpose
+        content_outline: |
+          # <Component name>
+          One paragraph description.
+          ## Prerequisites
+          ## Running the server
+          ## Running tests
+          ## API endpoints
+      verification:
+        node: |
+          - README.md exists at component root
+          - contains headings for prerequisites, running the server, running tests, and API endpoints
+      docs: |
+        - Generated last, same convention as apps/todo/blueprint/backend.graph.yaml's readme
+
+function:
+  exports:
+    - name: list_priorities
+      kind: port
+      from: api_routes.list_priorities
+      signature: "GET /api/v1/priorities -> PriorityRead[]"
+    - name: create_priority
+      kind: port
+      from: api_routes.create_priority
+      signature: "POST /api/v1/priorities -> PriorityRead"
+    - name: list_severities
+      kind: port
+      from: api_routes.list_severities
+      signature: "GET /api/v1/severities -> SeverityRead[]"
+    - name: create_severity
+      kind: port
+      from: api_routes.create_severity
+      signature: "POST /api/v1/severities -> SeverityRead"
+    - name: list_incident_types
+      kind: port
+      from: api_routes.list_incident_types
+      signature: "GET /api/v1/incident-types -> IncidentTypeRead[]"
+    - name: create_incident_type
+      kind: port
+      from: api_routes.create_incident_type
+      signature: "POST /api/v1/incident-types -> IncidentTypeRead"
+    - name: list_incidents
+      kind: port
+      from: api_routes.list_incidents
+      signature: "GET /api/v1/incidents?status= -> IncidentRead[]"
+    - name: create_incident
+      kind: port
+      from: api_routes.create_incident
+      signature: "POST /api/v1/incidents -> IncidentRead"
+    - name: update_incident
+      kind: port
+      from: api_routes.update_incident
+      signature: "PUT /api/v1/incidents/{id} -> IncidentRead"
+      comment: |
+        No frontend imports this backend (dispatch is backend-only, unlike apps/todo/), so
+        these exports currently have no consumer — declared anyway for schema consistency
+        and in case a frontend is added later, same as any component's public contract.
+
+verification:
+  - node: data_schema
+    backend: pytest
+    tests: tests/test_schemas.py
+  - node: reference_crud
+    backend: pytest
+    tests: tests/test_crud_reference.py
+  - node: incident_crud
+    backend: pytest
+    tests: tests/test_crud_incidents.py
+  - node: api_routes
+    backend: pytest
+    tests: tests/test_routes_dispatch.py
+    comment: |
+      - FK-missing 404s (type_id/priority_id/severity_id)
+      - status filter on GET /incidents
+      - slug auto-generation on POST /incident-types

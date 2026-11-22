@@ -1,0 +1,10 @@
+# ── App-scoped settings for fullstack_app ──────────────────────────────────
+# Referenced from any *.graph.yaml under this blueprint/ directory as
+# ${{ settings.KEY }} (see docs/DEV/BUILD/refactoring-plan-v1.md §1.2).
+settings:
+  - key: BACKEND_FASTAPI_PORT
+    value: 8004
+    comment: FastAPI backend port
+  - key: FRONTEND_VITE_PORT
+    value: 5177
+    comment: Vite dev server port

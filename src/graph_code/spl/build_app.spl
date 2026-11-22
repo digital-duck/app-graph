@@ -1,0 +1,101 @@
+-- build_app.spl
+-- System orchestrator for graph-code. Reads a system graph.yaml (e.g.
+-- apps/todo/blueprint/main.graph.yaml), builds each imported component in authored order by
+-- shelling out to build_component.spl per component, then runs
+-- integrate_system.spl once every component is verified.
+--
+-- Ported from graph-driven-workflow/spl/build_app.spl. That original assumed
+-- a `CALL run_workflow("build_component", ...)` primitive — no such
+-- CALL-able primitive exists anywhere in spl3 (confirmed by searching
+-- SPL.py/spl3/cli.py and the wider SPL.py source: the only `run_workflow` is
+-- `_run_workflow`, an internal asyncio helper used by the CLI's own
+-- `run`/`resume` commands). This version calls the real mechanism instead:
+-- spl/tools.py's run_build_component/run_integrate_system shell out to
+-- `spl3 run spl/<workflow>.spl` as a subprocess — the same thing you'd type
+-- by hand, just driven from here. See docs/DEV/BUILD/README.md §12.
+--
+-- Usage:
+--   spl3 run spl/build_app.spl --tools spl/tools.py \
+--     -p system_yaml=apps/todo/blueprint/main.graph.yaml --llm claude_cli
+--
+-- To save the generated app somewhere other than next to its blueprint
+-- (e.g. to test a fresh generation without overwriting an existing one),
+-- pass -p output_dir=/some/new/path — each component is then written to
+-- {output_dir}/{component_id}/ (e.g. {output_dir}/backend, {output_dir}/frontend)
+-- instead of the default location next to its own *.graph.yaml file.
+
+WORKFLOW build_app
+    INPUT:
+        @system_yaml TEXT DEFAULT 'apps/todo/blueprint/main.graph.yaml',
+        @log_dir TEXT DEFAULT 'logs/spl',
+        @llm TEXT DEFAULT 'claude_cli',
+        @output_dir TEXT DEFAULT ''
+    OUTPUT:
+        @system_manifest TEXT
+DO
+    CALL now_float() INTO @t_start
+    CALL now_iso() INTO @_ts
+    CALL sanitize_ts(@_ts) INTO @_ts_safe
+    CALL make_log_path(@log_dir, @_ts_safe) INTO @log_file
+    CALL write_file(@log_file, f"# System Build\n\nsystem: {@system_yaml}\nstarted: {@_ts}\n\n", "w") INTO @_
+
+    -- 1. Load imports: from the system graph, in authored order
+    CALL system_components(@system_yaml) INTO @components
+    CALL component_count(@components) INTO @comp_count
+
+    LOGGING f"Building {@comp_count} components in authored import order" LEVEL INFO
+
+    -- 2. Build each component in order; block on verification failure
+    @system_manifest := ""
+    @_i := 0
+
+    WHILE @_i < @comp_count DO
+        CALL component_item(@components, @_i) INTO @item
+        CALL component_id(@item) INTO @component
+        CALL component_graph(@item) INTO @comp_graph
+        CALL component_tech_profile(@comp_graph) INTO @profile
+        CALL component_output_dir(@comp_graph, @output_dir) INTO @out_dir
+        CALL seed_component_scaffold(@comp_graph, @profile, @output_dir) INTO @seed_status
+        LOGGING f"Scaffold seed: {@seed_status}" LEVEL INFO
+        CALL write_settings_config(@comp_graph, @out_dir, @profile) INTO @config_status
+        LOGGING f"Settings config: {@config_status}" LEVEL INFO
+        LOGGING f"Building component [{@_i + 1}/{@comp_count}]: {@component} ({@comp_graph})" LEVEL INFO
+
+        CALL run_build_component(@comp_graph, @profile, @out_dir, @log_dir, @llm) INTO @comp_manifest
+
+        EVALUATE @comp_manifest
+            WHEN contains("FAILED") THEN
+                LOGGING f"Component {@component} FAILED — halting build" LEVEL ERROR
+                CALL write_file(@log_file, f"## HALTED at {@component}\n\n{@comp_manifest}\n", "a") INTO @_
+                RETURN f"BUILD HALTED: component {@component} failed verification\n{@comp_manifest}"
+            ELSE
+                LOGGING f"Component {@component} complete" LEVEL INFO
+                @system_manifest := @system_manifest + f"\n## {@component}\n{@comp_manifest}"
+        END
+        @_i := @_i + 1
+    END
+
+    -- 3. All components verified — run system integration
+    LOGGING "All components verified — starting system integration" LEVEL INFO
+
+    CALL run_integrate_system(@system_yaml, @log_dir, @llm, @output_dir) INTO @integration_report
+
+    EVALUATE @integration_report
+        WHEN contains("BLOCKED") THEN
+            LOGGING f"Integration blocked: {@integration_report}" LEVEL ERROR
+            RETURN f"BUILD FAILED at integration: {@integration_report}"
+        WHEN contains("FAILED") THEN
+            LOGGING f"Integration failed: {@integration_report}" LEVEL ERROR
+            RETURN f"BUILD FAILED at integration: {@integration_report}"
+        ELSE
+            LOGGING "System integration complete" LEVEL INFO
+    END
+
+    @system_manifest := @system_manifest + f"\n## System Integration\n{@integration_report}"
+
+    CALL time_elapsed(@t_start) INTO @total_elapsed
+    LOGGING f"System build complete in {@total_elapsed}s" LEVEL INFO
+    CALL write_file(@log_file, f"## System complete\n\ntotal: {@total_elapsed}s\n\n{@system_manifest}\n", "a") INTO @_
+
+    RETURN @system_manifest
+END

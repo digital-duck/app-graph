@@ -1,0 +1,95 @@
+# Fullstack App
+
+A full-stack FastAPI + Vue 3 template with JWT authentication, RBAC (a superuser flag), user management, and owner-scoped items CRUD. It's the first app in this family with authentication — self-registration, login, password hashing/reset, and per-user data scoping — layered on top of the CRUD pattern established by `todo`/`kanban`. Scope (per the source app's own BRIEF.md): auth + users + items, no Alembic migrations, no real email sending, no Playwright E2E.
+
+## Status
+
+See [apps/README.md](../README.md)'s `fullstack` row for build/test history. This README's build/run instructions reflect the 2026-08-14 framework refactor (`docs/DEV/BUILD/refactoring-plan-v1.md`) — app-scoped `settings.yaml`, de-prefixed backend node ids (`auth_schemas`→`data_schema`, `orm_models`→`orm_model`), and the `app/config.py`-based CORS wiring — which has not yet been verified against a real `spl3` build for this app (it was originally built before the refactor existed).
+
+## Architecture
+
+The Vue.js frontend (port **5177**) communicates with the FastAPI backend (port **8004**) over REST, with CORS enabled on the backend; see [backend/README.md](backend/README.md) and [frontend/README.md](frontend/README.md) for each component's own setup, run, and test instructions. Ports are defined once in [blueprint/settings.yaml](blueprint/settings.yaml) and referenced from every `*.graph.yaml` as `${{ settings.KEY }}`.
+
+## Running the full system
+
+**1. Build** — generate and install both components from the graph:
+
+```bash
+spl3 run spl/build_app.spl \
+    --tools spl/tools.py \
+    -p system_yaml=apps/fullstack/blueprint/main.graph.yaml \
+    --llm claude_cli
+```
+
+To generate a fresh copy of the app into a new directory instead of overwriting
+`apps/fullstack/backend`/`apps/fullstack/frontend` in place, add `-p output_dir=...`:
+
+```bash
+mkdir -p logs/console
+spl3 run spl/build_app.spl \
+    --tools spl/tools.py \
+    -p system_yaml=apps/fullstack/blueprint/main.graph.yaml \
+    -p output_dir=apps/fullstack-v2 \
+    --llm claude_cli \
+    2>&1 | tee "logs/console/build_app-$(date +%Y-%m-%d-%H-%M-%S).md"
+```
+
+The `tee` keeps the console output live while also capturing it to a
+timestamped file under `logs/console/` — useful since a failed build's real
+error (e.g. a `pytest`/SQLAlchemy traceback) often scrolls past the terminal
+buffer before you can read it, and `spl3`'s own log (path printed as `Log:`
+at the end of the run) captures the workflow trace but not the raw stdout.
+
+Each component is then written to `{output_dir}/{component_id}/` — i.e.
+`apps/fullstack-v2/backend/` and `apps/fullstack-v2/frontend/` for the command above —
+leaving the existing `apps/fullstack/backend`/`apps/fullstack/frontend` untouched.
+
+See [docs/DEV/BUILD/README.md](../../docs/DEV/BUILD/README.md) §12.1 for full build options and §12.4 for `--output_dir` usage.
+
+**Building to a redirected `-p output_dir=...` location**: the build seeds each component's pre-authored
+scaffold (`tests/`, and for the frontend also `package.json`/`package-lock.json`/`vite.config.ts`/
+`tsconfig.json`/`index.html`/`.env`) into the new location automatically, but **deliberately does
+not copy `node_modules/`** (copying a dependency tree risks silent drift from `package.json` —
+reinstalling is safer). If the frontend build halts with `vitest: not found` (exit 127), run
+`npm install` by hand in the redirected frontend directory once, then re-run the same
+`spl3 run spl/build_app.spl ...` command — it picks up where it left off (the backend and any
+already-passing frontend nodes are cached, so only the remaining work re-runs).
+
+**If a rebuild is needed after editing the blueprint** (e.g. iterating on a spec fix), clear that
+component's cache and any stale runtime SQLite files first, so the fix is guaranteed to actually
+regenerate rather than serve a stale cache hit:
+
+```bash
+rm -rf apps/fullstack-v2/backend/.spl_cache apps/fullstack-v2/frontend/.spl_cache
+rm -f apps/fullstack-v2/backend/*.db
+```
+
+**2. Start the backend:**
+
+```bash
+cd backend
+uvicorn app.main:app --reload --port 8004
+```
+
+**3. Start the frontend** (separate terminal):
+
+```bash
+cd frontend
+npm run dev
+```
+
+The app is then available at <http://localhost:5177>.
+
+**First login:** a superuser account is created automatically on backend startup —
+`admin@example.com` / `adminpassword`. There is no wired self-registration flow in the
+frontend (`POST /api/v1/users/signup` exists server-side and is covered by backend pytest,
+but the frontend's "Sign up" link is static markup only).
+
+## Applications
+
+- **user_registers** — self-registration via `POST /api/v1/users/signup` (backend only, no frontend flow wired)
+- **user_logs_in** — JWT login, token stored in `localStorage`, reactive login state
+- **user_manages_items** — an authenticated user creates, views, edits, and deletes their own items; superusers see all items
+- **superuser_manages_users** — full user-management CRUD, superuser-only (backend only, no frontend UI)
+- **user_resets_password** — password recovery/reset via a stateless token (backend only, no frontend UI)
+- **manage_items_authenticated** — the capstone: full golden-path lifecycle (register → login → create item → edit → delete → verify gone)

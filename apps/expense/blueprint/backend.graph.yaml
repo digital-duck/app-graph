@@ -1,0 +1,425 @@
+# ── Unified Duality Graph Schema v2.1 — Software Profile ────────────────────
+# Migrated from graph-driven-workflow/apps/SPL/expense/components/backend/graph.yaml
+domain: software/backend/fastapi
+target_languages: [python]
+comment: |
+  FastAPI backend: schema, DB, ORM model, CRUD, report aggregator, API routes.
+  Third app ported into graph-code/apps/ — distinct from apps/todo/ (single
+  entity, no aggregation) and apps/dispatch/ (FK relationships, no aggregation):
+  expense exercises SQL GROUP BY aggregation (report_aggregator) and Decimal
+  precision handling, patterns neither prior app needed.
+capstone: api_routes
+
+tech_profile: python_fastapi
+port: ${{ settings.BACKEND_FASTAPI_PORT }}
+
+# Source of truth for id/version/domain_type — see
+# docs/DEV/BUILD/refactoring-plan-v1.md §1.1.
+blueprint:
+  id: expense_app_backend
+  schema_version: "2.2"
+  graph_schema_version: "2.1"
+  domain_type: software
+  provenance: authored
+  parent_blueprint: null
+  lineage: []
+
+form:
+  primitives:
+    python:
+      defines: "Python 3.x runtime and standard library"
+      tier: 0
+      kind: config
+    sqlite:
+      defines: "SQLite embedded relational database engine"
+      tier: 0
+      kind: config
+    fastapi:
+      defines: "FastAPI web framework: routing, dependency injection, OpenAPI generation"
+      tier: 0
+      kind: config
+    sqlalchemy:
+      defines: "SQLAlchemy ORM: declarative models, session management, query DSL"
+      tier: 0
+      kind: config
+    pydantic:
+      defines: "Pydantic: runtime data validation and serialization via type hints"
+      tier: 0
+      kind: config
+
+  nodes:
+    requirements:
+      kind: doc
+      defines: "requirements.txt: pinned pip dependencies for this backend"
+      composed_of: [python, sqlite, fastapi, sqlalchemy, pydantic]
+      tier: 1
+      spec:
+        interface: |
+          Output: requirements.txt at the component root (NOT under app/) — plain pip
+          requirements format, one package per line, not Python code.
+        contract: |
+          List the pip packages needed to install and run this backend, with minimum-version
+          pins (>=): fastapi, sqlalchemy, pydantic, uvicorn[standard], pytest, httpx.
+          One package per line, e.g. `fastapi>=0.111.0`. No comments, no section headers,
+          no pip install command — just the requirements.txt file content itself.
+      verification:
+        node: |
+          - requirements.txt exists at component root
+          - contains fastapi, sqlalchemy, pydantic, uvicorn, pytest, httpx
+      docs: |
+        - Same convention as apps/todo/ and apps/dispatch/'s requirements node
+
+    data_schema:
+      kind: concept
+      defines: "Pydantic models: ExpenseCreate (input), Expense (output), CategorySummary, ExpenseSummary (report)"
+      composed_of: [pydantic, python]
+      tier: 1
+      spec:
+        interface: |
+          from decimal import Decimal
+          from datetime import date, datetime
+          from pydantic import BaseModel, ConfigDict, field_serializer, field_validator
+
+          class ExpenseCreate(BaseModel):
+              amount: Decimal
+              category: str
+              date: date
+              description: str = ""
+
+          class Expense(BaseModel):
+              model_config = ConfigDict(from_attributes=True)
+              id: int
+              amount: Decimal
+              category: str
+              date: date
+              description: str
+              created_at: datetime
+
+              @field_serializer("amount")
+              def serialize_amount(self, v: Decimal) -> float:
+                  return float(v)
+
+          class CategorySummary(BaseModel):
+              category: str
+              total: Decimal
+              count: int
+
+              @field_serializer("total")
+              def serialize_total(self, v: Decimal) -> float:
+                  return float(v)
+
+          class ExpenseSummary(BaseModel):
+              total: Decimal
+              by_category: list[CategorySummary]
+
+              @field_serializer("total")
+              def serialize_total(self, v: Decimal) -> float:
+                  return float(v)
+        contract: |
+          amount field_validator: call v.quantize(Decimal('0.01')) to round to 2 decimal places;
+          then raise ValueError if result <= 0 (zero and negative rejected); return the rounded Decimal.
+          category field_validator: MUST strip whitespace first, then raise ValueError if empty after
+          strip; return the stripped string — `return v.strip()` NOT `return v`.
+          description field_validator: strip whitespace and return stripped; no error if empty
+          (optional field).
+          All four models defined in this single file.
+          ConfigDict is an import; model_config is a class attribute — do NOT write
+          `from pydantic import model_config`.
+          Decimal is from the stdlib `decimal` module; date and datetime are from the stdlib
+          `datetime` module.
+          CRITICAL: Pydantic v2 serializes Decimal fields to JSON as STRINGS by default, not
+          numbers — every Decimal-typed OUTPUT field (Expense.amount, CategorySummary.total,
+          ExpenseSummary.total) MUST have an explicit @field_serializer converting it to float,
+          exactly as shown above, or clients receive `"15.50"` instead of `15.50` and any
+          numeric comparison against the response body raises TypeError. ExpenseCreate.amount
+          does NOT need one — it's an input-only model, never serialized to JSON.
+      verification:
+        node: |
+          - pydantic rejects zero and negative amount
+          - rejects empty/whitespace-only category
+          - all four classes importable from app.schemas
+        edge: |
+          - Expense field types match SQLAlchemy column types: Decimal<->Numeric(10,2),
+            date<->Date, datetime<->DateTime
+      docs: |
+        - Central data contract
+        - ExpenseSummary is the report output shape used by report_aggregator
+
+    db_connection:
+      kind: module
+      defines: "SQLAlchemy engine and session factory bound to expenses.db"
+      composed_of: [sqlalchemy, sqlite, python]
+      tier: 1
+      spec:
+        interface: |
+          - get_db() -> Generator[Session, None, None]
+        contract: |
+          DATABASE_URL = "sqlite:///./expenses.db"
+          engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+          SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+          Base = declarative_base()
+          get_db() yields one Session per request; always closes on exit via try/finally.
+          Exports: engine, SessionLocal, Base, get_db
+      verification:
+        node: |
+          - engine.connect() succeeds
+          - session opens and closes without error
+        edge: |
+          - SQLite file created at expected path on first connection
+      docs: |
+        - FastAPI dependency — injected into every route via Depends(get_db)
+
+    orm_model:
+      kind: module
+      defines: "SQLAlchemy declarative model mapping Expense to the expenses table"
+      composed_of: [sqlalchemy, db_connection]
+      tier: 2
+      spec:
+        interface: |
+          class ExpenseModel(Base):
+              __tablename__ = "expenses"
+              id:          Integer, primary_key=True, autoincrement
+              amount:      Numeric(10, 2), not null
+              category:    String, not null
+              date:        Date, not null
+              description: String, default ""
+              created_at:  DateTime, default=datetime.utcnow
+        contract: |
+          MUST use Numeric(10, 2) for amount — NOT Float (Numeric preserves decimal precision).
+          MUST use Date (from sqlalchemy) for the date column.
+          MUST use DateTime with default=datetime.utcnow for created_at (auto-set on insert).
+          Import Base from app.database — do NOT redefine Base here.
+          Import datetime from the stdlib `datetime` module for the default.
+          Do NOT import anything from app.schemas (the Pydantic module) in this file — SQLAlchemy
+          models never reference Pydantic classes; the two layers are connected only by field
+          names/types matching, verified separately by data_schema's contract, not by an import
+          (same rule as apps/dispatch/blueprint/backend.graph.yaml's dispatch_models — a real
+          generation-fidelity bug was found there from omitting this instruction).
+      verification:
+        node: |
+          - create_all() creates table
+          - insert + select roundtrip preserves all fields
+        edge: |
+          - ExpenseModel columns map 1:1 to Expense Pydantic schema field types
+      docs: |
+        - Single source of truth for DB schema
+
+    crud_operations:
+      kind: module
+      defines: "Python functions: get_expenses (with optional filters), create_expense, delete_expense"
+      composed_of: [orm_model, db_connection, data_schema]
+      tier: 3
+      spec:
+        interface: |
+          def get_expenses(db: Session, category: str | None = None,
+                            start_date: date | None = None,
+                            end_date: date | None = None) -> list[Expense]: ...
+          def create_expense(db: Session, item: ExpenseCreate) -> Expense: ...
+          def delete_expense(db: Session, id: int) -> None: ...
+        contract: |
+          get_expenses: starts with `query = db.query(ExpenseModel)` then applies filters:
+            if category: query = query.filter(ExpenseModel.category == category)
+            if start_date: query = query.filter(ExpenseModel.date >= start_date)
+            if end_date: query = query.filter(ExpenseModel.date <= end_date)
+            Returns list of Expense Pydantic models (use Expense.model_validate(row) for each row).
+          create_expense: creates ExpenseModel(amount=item.amount, category=item.category,
+            date=item.date, description=item.description); db.add(); db.commit(); db.refresh();
+            returns Expense.model_validate(row).
+          delete_expense: query by id; if not found raise HTTPException(status_code=404,
+            detail="Expense not found"); otherwise db.delete(row); db.commit(); return None.
+          Use `from sqlalchemy.orm import Session` for the type annotation.
+          Do NOT import or redefine get_db — it belongs in app.database.
+          Import EXACTLY these names from app.schemas: Expense, ExpenseCreate. There is no
+          ExpenseRead/ExpenseOut/ExpenseResponse/ExpenseDTO anywhere in this app — do not invent
+          one; the response model is named Expense, imported and used as-is.
+      verification:
+        node: |
+          - pytest with in-memory SQLite: each function tested with seeded data
+          - 404 on missing id
+        edge: |
+          - returned Pydantic models pass Expense schema validation
+          - date filters are inclusive
+      docs: |
+        - Pure data layer — only FastAPI import is HTTPException for 404
+
+    report_aggregator:
+      kind: module
+      defines: "Aggregation function: expense totals and per-category breakdown using SQL GROUP BY"
+      composed_of: [orm_model, db_connection, data_schema]
+      tier: 3
+      spec:
+        interface: |
+          def get_summary(db: Session, category: str | None = None,
+                           start_date: date | None = None,
+                           end_date: date | None = None) -> ExpenseSummary: ...
+        contract: |
+          Apply the same filters as crud_operations.get_expenses (category, start_date, end_date).
+          Use SQLAlchemy aggregation:
+            from sqlalchemy import func
+            rows = (db.query(ExpenseModel.category, func.sum(ExpenseModel.amount),
+                              func.count(ExpenseModel.id))
+                     .group_by(ExpenseModel.category)
+                     .all())
+          (Apply the same filter() calls on this query before .all(), exactly as in get_expenses.)
+          Build by_category = [CategorySummary(category=cat, total=Decimal(str(total)), count=cnt)
+                                for cat, total, cnt in rows]
+          Sort by_category by total DESC.
+          total = sum of all by_category totals (sum with Decimal, not float).
+          If no rows match, return ExpenseSummary(total=Decimal('0'), by_category=[]).
+          Import Decimal from decimal; import func from sqlalchemy.
+          Use `from sqlalchemy.orm import Session` for the type annotation.
+          Import EXACTLY these names from app.schemas: ExpenseSummary, CategorySummary. There is
+          no ExpenseSummaryRead/ExpenseReport/SummaryDTO or similar variant anywhere in this app.
+      verification:
+        node: |
+          - seeded DB: correct total and per-category counts
+          - sorted by total DESC
+          - empty DB -> zero total
+        edge: |
+          - returned ExpenseSummary passes Pydantic validation
+          - CategorySummary types match schema
+      docs: |
+        - Read-only aggregation — no mutations, pure reporting layer
+        - The genuinely new structural feature vs apps/todo/ and apps/dispatch/ — neither
+          needed SQL-level aggregation
+
+    api_routes:
+      kind: module
+      defines: "FastAPI app exposing expense CRUD and summary as REST endpoints"
+      composed_of: [fastapi, crud_operations, report_aggregator, data_schema]
+      tier: 4
+      ports:
+        list_expenses:
+          signature: "GET /expenses -> Expense[]"
+          kind: call
+          direction: out
+        create_expense:
+          signature: "POST /expenses (amount, category, date, description) -> Expense"
+          kind: call
+          direction: out
+        delete_expense:
+          signature: "DELETE /expenses/{id} -> void"
+          kind: call
+          direction: out
+        get_summary:
+          signature: "GET /expenses/summary -> ExpenseSummary"
+          kind: call
+          direction: out
+      spec:
+        interface: |
+          GET    /expenses          -> list[Expense]
+            (query params: category: str | None, start_date: date | None, end_date: date | None)
+          POST   /expenses          -> Expense  (status_code=201)
+          DELETE /expenses/{id}     -> None     (status_code=204)
+          GET    /expenses/summary  -> ExpenseSummary
+            (query params: category: str | None, start_date: date | None, end_date: date | None)
+        contract: |
+          CORS allowed origin built from FRONTEND_VITE_PORT, imported from app.config
+          (from app.config import FRONTEND_VITE_PORT) — do NOT hardcode the port or the origin
+          URL as a string literal; construct allow_origins from the imported constant instead
+          (e.g. [f"http://localhost:{FRONTEND_VITE_PORT}"]). allow_methods=["*"],
+          allow_headers=["*"]. Use CORSMiddleware from fastapi.middleware.cors.
+          Pydantic validates all request bodies; 404 on unknown id (propagated from crud_operations).
+          Import EXACTLY these names from app.schemas: Expense, ExpenseCreate, ExpenseSummary.
+          There is no ExpenseRead/ExpenseOut/ExpenseResponse/ExpenseDTO anywhere in this app.
+          MUST import the models module: `from app import models` so SQLAlchemy registers
+          ExpenseModel with Base BEFORE calling create_all.
+          MUST call Base.metadata.create_all(bind=engine) at module level (after imports, before
+          app = FastAPI()) — omitting this causes OperationalError: no such table: expenses.
+          MUST import get_db from app.database — NEVER redefine get_db locally; tests override
+          app.dependency_overrides[get_db] targeting the function object from app.database; a local
+          redefinition creates a different object so overrides are invisible and DB isolation breaks.
+          Query param names for GET /expenses and GET /expenses/summary:
+            category: Optional[str] = None
+            start_date: Optional[date] = None
+            end_date: Optional[date] = None
+          Pass these through to get_expenses() and get_summary() respectively.
+          POST /expenses: body is ExpenseCreate; call create_expense(db, item); return with
+          status_code=201.
+          DELETE /expenses/{id}: call delete_expense(db, id); return Response(status_code=204).
+          GET /expenses/summary route MUST be declared BEFORE any GET /expenses/{id}-shaped route
+          (none exists in this app, but declare summary first regardless, as a forward-compatible
+          habit) to avoid FastAPI treating "summary" as a path parameter.
+      verification:
+        node: |
+          - pytest TestClient: all endpoints return correct status + response shape
+          - summary reflects seeded data
+        edge: |
+          - CORS headers present
+          - response shapes match data_schema Pydantic models
+      docs: |
+        - Backend public surface — frontend api_client is validated against this contract
+
+    readme:
+      kind: doc
+      defines: "README.md: setup, run, and test instructions for this backend"
+      composed_of: [api_routes]
+      tier: 5
+      spec:
+        interface: |
+          Output: README.md at the component root (NOT under app/) — plain Markdown, not code.
+          Do NOT follow the Python/FastAPI code-style conventions above for this file; those apply
+          to source files only. This file is prose documentation.
+          CRITICAL: output ONLY the Markdown document itself — no preamble narration ("Now I have
+          everything needed..."), no tool-call syntax, no commentary before or after the document.
+          A prior run (apps/dispatch/backend/README.md) leaked raw tool-call XML into this exact
+          node's output; this instruction exists specifically to prevent a repeat.
+        contract: |
+          Must include, as Markdown sections:
+          - Title + one-paragraph description of what this backend does
+          - Prerequisites: Python version, how to install dependencies
+          - Running the server: exact command (uvicorn app.main:app --reload) and default URL
+            (http://localhost:8001, OpenAPI docs at /docs)
+          - Running tests: exact command (pytest tests/)
+          - API summary: list each endpoint from api_routes' ports below, with method, path, and
+            one-line purpose
+        content_outline: |
+          # <Component name>
+          One paragraph description.
+          ## Prerequisites
+          ## Running the server
+          ## Running tests
+          ## API endpoints
+      verification:
+        node: |
+          - README.md exists at component root
+          - contains headings for prerequisites, running the server, running tests, and API endpoints
+      docs: |
+        - Generated last, same convention as apps/todo/ and apps/dispatch/'s readme
+
+function:
+  exports:
+    - name: list_expenses
+      kind: port
+      from: api_routes.list_expenses
+      signature: "GET /expenses -> Expense[]"
+    - name: create_expense
+      kind: port
+      from: api_routes.create_expense
+      signature: "POST /expenses (amount, category, date, description) -> Expense"
+    - name: delete_expense
+      kind: port
+      from: api_routes.delete_expense
+      signature: "DELETE /expenses/{id} -> void"
+    - name: get_summary
+      kind: port
+      from: api_routes.get_summary
+      signature: "GET /expenses/summary -> ExpenseSummary"
+      comment: |
+        The four exports above are the OpenAPI contract that frontend.graph.yaml
+        imports and binds api_client calls against — see frontend.graph.yaml's
+        function.calls for the consumer side of each contract.
+
+verification:
+  - node: data_schema
+    backend: pytest
+    tests: tests/test_schemas.py
+  - node: crud_operations
+    backend: pytest
+    tests: tests/test_crud.py
+  - node: report_aggregator
+    backend: pytest
+    tests: tests/test_reports.py
+  - node: api_routes
+    backend: pytest
+    tests: tests/test_routes.py

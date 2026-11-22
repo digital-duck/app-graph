@@ -1,0 +1,723 @@
+# ── Unified Duality Graph Schema v2.1 — Software Profile ────────────────────
+# Migrated from graph-driven-workflow/apps/SPL/mealie/components/backend/graph.yaml
+# (v1 primitives/concepts/tier schema -> form.primitives/form.nodes).
+domain: software/backend/fastapi
+target_languages: [python]
+comment: |
+  FastAPI backend: recipe + organizer (tags/categories/tools) schemas, ORM
+  models, CRUD, paginated + filtered routes. Largest ported app so far —
+  two related entity families (recipe, organizer) with a many-to-many
+  relationship between them, nested child entities (ingredients, steps,
+  notes, nutrition) replaced wholesale on update, and generic pagination
+  (PaginationBase[T]) neither apps/todo/, apps/dispatch/, nor apps/expense/
+  needed.
+
+tech_profile: python_fastapi
+port: ${{ settings.BACKEND_FASTAPI_PORT }}
+
+blueprint:
+  id: mealie_recipe_backend
+  schema_version: "2.3"
+  graph_schema_version: "2.1"
+  domain_type: software
+  provenance: authored
+  parent_blueprint: null
+  lineage: []
+
+form:
+  primitives:
+    python:
+      defines: "Python 3.11+ runtime and standard library"
+      tier: 0
+      kind: config
+    sqlite:
+      defines: "SQLite embedded relational database"
+      tier: 0
+      kind: config
+    fastapi:
+      defines: "FastAPI web framework: routing, dependency injection, OpenAPI"
+      tier: 0
+      kind: config
+    sqlalchemy:
+      defines: "SQLAlchemy 2.0 ORM: declarative models, relationships, session management"
+      tier: 0
+      kind: config
+    pydantic:
+      defines: "Pydantic v2: runtime data validation via type hints"
+      tier: 0
+      kind: config
+    slugify:
+      defines: "python-slugify: convert text to URL-safe slugs"
+      tier: 0
+      kind: config
+
+  nodes:
+    requirements:
+      kind: doc
+      defines: "requirements.txt: pinned pip dependencies for this backend"
+      composed_of: [python, sqlite, fastapi, sqlalchemy, pydantic, slugify]
+      tier: 1
+      spec:
+        interface: |
+          Output: requirements.txt at the component root (NOT under app/) — plain pip
+          requirements format, one package per line, not Python code.
+        contract: |
+          List the pip packages needed to install and run this backend, with minimum-version
+          pins (>=). Include:
+          - fastapi, sqlalchemy, pydantic, python-slugify (from the primitives above — pip
+            package name for the slugify primitive is python-slugify, not slugify)
+          - uvicorn[standard] — needed to run the server (uvicorn app.main:app), even though
+            it is not one of the primitives above and is never imported directly
+          - pytest, httpx — needed to run this component's test suite
+          One package per line, e.g. `fastapi>=0.111.0`. No comments, no section headers,
+          no pip install command — just the requirements.txt file content itself.
+      verification:
+        node: |
+          - requirements.txt exists at component root
+          - contains fastapi, sqlalchemy, pydantic, python-slugify, uvicorn, pytest, httpx
+      docs: |
+        - Generated early (depends only on primitives), same convention as every other
+          ported app's requirements node
+
+    organizer_schema:
+      kind: concept
+      defines: "Pydantic models for tags, categories, and tools (the three organizer types)"
+      composed_of: [pydantic, python]
+      tier: 1
+      spec:
+        interface: |
+          # All in app/schemas/organizers.py
+          class TagSave(BaseModel):
+            name: str                    # validated: strip + reject empty; slug auto-generated
+            slug: str | None = None      # if None, generated from name
+
+          class RecipeTag(TagSave):
+            model_config = ConfigDict(from_attributes=True)
+            id: UUID                     # auto-assigned
+
+          class CategorySave(BaseModel):
+            name: str
+            slug: str | None = None
+
+          class RecipeCategory(CategorySave):
+            model_config = ConfigDict(from_attributes=True)
+            id: UUID
+
+          class ToolSave(BaseModel):
+            name: str
+            slug: str | None = None
+            on_hand: bool = False
+
+          class RecipeTool(ToolSave):
+            model_config = ConfigDict(from_attributes=True)
+            id: UUID
+        contract: |
+          TagSave, CategorySave, ToolSave name validator: strip whitespace; raise ValueError if empty.
+          slug field: if provided, use as-is; if None, generate via slugify(name, max_length=250).
+          slugify import: from slugify import slugify
+          All three Save types follow the same pattern — the LLM may DRY them via a shared base.
+          RecipeTag / RecipeCategory / RecipeTool are the output schemas (from_attributes=True).
+          UUID from uuid import UUID; use uuid4() for default in ORM, not here.
+      verification:
+        node: |
+          - empty name rejected
+          - slug generated from name
+          - slug accepted when provided
+          - all 6 types importable
+        edge: |
+          - RecipeTag matches TagModel ORM columns
+          - RecipeCategory matches CategoryModel
+          - RecipeTool matches ToolModel
+      docs: |
+        - Source: mealie/schema/recipe/recipe_category.py and recipe.py (RecipeTag, RecipeCategory, RecipeTool classes)
+
+    recipe_schema:
+      kind: concept
+      defines: "Pydantic models for recipes: create input, summary (list), full output, sub-entities"
+      composed_of: [pydantic, python, slugify, organizer_schema]
+      tier: 1
+      spec:
+        interface: |
+          # All in app/schemas/recipes.py
+          class RecipeIngredient(BaseModel):
+            quantity: float | None = None
+            unit: str | None = None       # ingredient unit name (simplified from reference)
+            food: str | None = None       # ingredient food name (simplified from reference)
+            note: str | None = None
+            display: str = ""             # display string for rendering
+
+          class RecipeStep(BaseModel):
+            id: UUID = Field(default_factory=uuid4)
+            title: str = ""
+            text: str
+
+          class RecipeNote(BaseModel):
+            title: str
+            text: str
+
+          class Nutrition(BaseModel):
+            calories: str | None = None
+            fatContent: str | None = None
+            proteinContent: str | None = None
+            carbohydrateContent: str | None = None
+            fiberContent: str | None = None
+            sodiumContent: str | None = None
+            sugarContent: str | None = None
+
+          class RecipeSettings(BaseModel):
+            public: bool = True
+            show_nutrition: bool = False
+            show_assets: bool = False
+            landscape_view: bool = False
+
+          class CreateRecipe(BaseModel):
+            name: str                     # validated: strip + reject empty; slug auto-generated
+
+          class RecipeSummary(BaseModel):
+            model_config = ConfigDict(from_attributes=True)
+            slug: str
+            name: str
+            description: str | None = None
+            tags: list[RecipeTag] = []
+            recipe_category: list[RecipeCategory] = []
+            tools: list[RecipeTool] = []
+            date_added: date | None = None
+
+          class PaginationBase(BaseModel):
+            page: int = 1
+            per_page: int = 50
+            total: int
+            total_pages: int
+            items: list[T]   # generic; instantiated as PaginationBase[RecipeSummary]
+
+          class Recipe(RecipeSummary):
+            recipe_ingredient: list[RecipeIngredient] = []
+            recipe_instructions: list[RecipeStep] = []
+            notes: list[RecipeNote] = []
+            nutrition: Nutrition | None = None
+            settings: RecipeSettings | None = None
+            prep_time: str | None = None
+            cook_time: str | None = None
+            total_time: str | None = None
+            recipe_yield: str | None = None
+        contract: |
+          CreateRecipe.name validator: strip whitespace; raise ValueError if empty after strip.
+          CreateRecipe slug is NOT in the input schema — generated server-side from name.
+          RecipeSummary.recipe_category field name: `recipe_category` (not `categories`) — must
+          match the ORM model's relationship attribute name.
+          Nutrition fields are all optional strings (raw data, not validated numerically).
+          PaginationBase[T]: use Python generics; items field is the only parameterised field.
+          from datetime import date for RecipeSummary.date_added.
+      verification:
+        node: |
+          - empty name rejected
+          - all types importable
+          - RecipeSummary.model_validate works on ORM row
+          - PaginationBase[RecipeSummary] accepts RecipeSummary list
+        edge: |
+          - Recipe extends RecipeSummary
+          - Recipe sub-entity types match ORM child models
+      docs: |
+        - Simplified from reference: IngredientFood/Unit collapsed to str
+        - auth fields removed
+        - household stripped
+
+    db_connection:
+      kind: module
+      defines: "SQLAlchemy engine + session factory bound to mealie.db"
+      composed_of: [sqlalchemy, sqlite, python]
+      tier: 1
+      spec:
+        interface: |
+          - get_db() -> Generator[Session, None, None]
+        contract: |
+          DATABASE_URL = "sqlite:///./mealie.db"
+          engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+          SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+          Base = declarative_base()
+          get_db() yields one Session per request; always closes on exit via try/finally.
+          Exports: engine, SessionLocal, Base, get_db
+      verification:
+        node: |
+          - engine.connect() succeeds
+          - session opens and closes
+        edge: |
+          - SQLite file created at expected path
+      docs: |
+        - Same pattern as todo/expense/kanban
+        - only DATABASE_URL and filename differ
+
+    organizer_orm_models:
+      kind: module
+      defines: "SQLAlchemy ORM models for Tag, Category, Tool + many-to-many association tables"
+      composed_of: [sqlalchemy, db_connection, organizer_schema]
+      tier: 2
+      spec:
+        interface: |
+          # app/models/organizers.py
+          # Association tables (module-level Table objects, not classes):
+          recipes_to_tags       = Table("recipes_to_tags", Base.metadata,
+            Column("recipe_id", ForeignKey("recipes.id"), primary_key=True),
+            Column("tag_id",    ForeignKey("tags.id"),    primary_key=True))
+          recipes_to_categories = Table("recipes_to_categories", Base.metadata, ...)
+          recipes_to_tools      = Table("recipes_to_tools", Base.metadata, ...)
+
+          class TagModel(Base):
+            __tablename__ = "tags"
+            id:   Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid4()))
+            slug: Mapped[str] = mapped_column(String, unique=True, nullable=False, index=True)
+            name: Mapped[str] = mapped_column(String, nullable=False)
+
+          class CategoryModel(Base): same shape as TagModel; __tablename__ = "categories"
+          class ToolModel(Base):     same shape as TagModel + on_hand: Mapped[bool] = mapped_column(Boolean, default=False)
+                                     __tablename__ = "tools"
+        contract: |
+          id stored as String UUID (use str(uuid4()) default, NOT GUID type — keep deps simple).
+          slug column: unique=True (DB-enforced uniqueness); index=True.
+          Association tables declared at module level using Table(); no separate class.
+          Import Base from app.database — do NOT redefine Base here.
+          TagModel, CategoryModel, ToolModel, and all three association tables must be importable
+          from app.models.organizers for `from app import models` to register them with Base.
+          Exported names used by recipe_orm_model: recipes_to_tags, recipes_to_categories, recipes_to_tools
+      verification:
+        node: |
+          - create_all() creates tags, categories, tools, and junction tables
+          - roundtrip insert+select preserves slug and name
+        edge: |
+          - Pydantic RecipeTag.model_validate(tag_row) succeeds
+          - RecipeCategory and RecipeTool same
+      docs: |
+        - Source: mealie/db/models/recipe/category.py, tag.py, tool.py + association proxy tables
+
+    recipe_orm_model:
+      kind: module
+      defines: "SQLAlchemy ORM model for RecipeModel + child tables (ingredients, steps, notes, nutrition, settings)"
+      composed_of: [sqlalchemy, db_connection, recipe_schema, organizer_orm_models]
+      tier: 2
+      spec:
+        interface: |
+          # app/models/recipes.py
+          class RecipeIngredientModel(Base):
+            __tablename__ = "recipe_ingredients"
+            id:        Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid4()))
+            recipe_id: Mapped[str] = mapped_column(String, ForeignKey("recipes.id"), nullable=False)
+            quantity:  Mapped[float | None] = mapped_column(Float)
+            unit:      Mapped[str | None]   = mapped_column(String)
+            food:      Mapped[str | None]   = mapped_column(String)
+            note:      Mapped[str | None]   = mapped_column(String)
+            display:   Mapped[str]          = mapped_column(String, default="")
+
+          class RecipeInstructionModel(Base):  # maps to RecipeStep schema
+            __tablename__ = "recipe_instructions"
+            id:        Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid4()))
+            recipe_id: Mapped[str] = mapped_column(String, ForeignKey("recipes.id"), nullable=False)
+            title:     Mapped[str] = mapped_column(String, default="")
+            text:      Mapped[str] = mapped_column(String, nullable=False)
+            position:  Mapped[int] = mapped_column(Integer, default=0)  # for ordering
+
+          class RecipeNoteModel(Base):
+            __tablename__ = "recipe_notes"
+            id:        Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid4()))
+            recipe_id: Mapped[str] = mapped_column(String, ForeignKey("recipes.id"), nullable=False)
+            title:     Mapped[str] = mapped_column(String, nullable=False)
+            text:      Mapped[str] = mapped_column(String, nullable=False)
+
+          class NutritionModel(Base):
+            __tablename__ = "recipe_nutrition"
+            id:                  Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid4()))
+            recipe_id:           Mapped[str] = mapped_column(String, ForeignKey("recipes.id"), unique=True)
+            calories:            Mapped[str | None] = mapped_column(String)
+            fat_content:         Mapped[str | None] = mapped_column(String)
+            protein_content:     Mapped[str | None] = mapped_column(String)
+            carbohydrate_content:Mapped[str | None] = mapped_column(String)
+
+          class RecipeModel(Base):
+            __tablename__ = "recipes"
+            id:          Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid4()))
+            slug:        Mapped[str] = mapped_column(String, unique=True, nullable=False, index=True)
+            name:        Mapped[str] = mapped_column(String, nullable=False)
+            description: Mapped[str | None] = mapped_column(String)
+            prep_time:   Mapped[str | None] = mapped_column(String)
+            cook_time:   Mapped[str | None] = mapped_column(String)
+            total_time:  Mapped[str | None] = mapped_column(String)
+            recipe_yield:Mapped[str | None] = mapped_column(String)
+            date_added:  Mapped[date | None] = mapped_column(Date, default=date.today)
+
+            # Many-to-many organizer relationships
+            tags:            relationship("TagModel", secondary=recipes_to_tags, lazy="joined")
+            recipe_category: relationship("CategoryModel", secondary=recipes_to_categories, lazy="joined")
+            tools:           relationship("ToolModel", secondary=recipes_to_tools, lazy="joined")
+
+            # One-to-many child relationships
+            recipe_ingredient:    relationship("RecipeIngredientModel",  back_populates="recipe",
+                                               cascade="all, delete-orphan", order_by="RecipeIngredientModel.id")
+            recipe_instructions:  relationship("RecipeInstructionModel", back_populates="recipe",
+                                               cascade="all, delete-orphan", order_by="RecipeInstructionModel.position")
+            notes:                relationship("RecipeNoteModel",         back_populates="recipe",
+                                               cascade="all, delete-orphan")
+            nutrition:            relationship("NutritionModel", back_populates="recipe",
+                                               uselist=False, cascade="all, delete-orphan")
+        contract: |
+          slug column: unique=True, index=True (same as organizer models).
+          id stored as String UUID (str(uuid4()) default) — no GUID custom type needed.
+          recipe_category relationship attribute name is `recipe_category` (not `categories`) to
+          match RecipeSummary.recipe_category Pydantic field — this is a naming invariant.
+          Many-to-many secondary= must reference the module-level Table objects from organizer_orm_models:
+            from app.models.organizers import recipes_to_tags, recipes_to_categories, recipes_to_tools
+          Child models (ingredients, steps, notes, nutrition) MUST cascade delete-orphan so that
+          PUT /recipes/{slug} can replace the full nested list without orphans.
+          Import Base from app.database; import date from datetime; import association tables from
+          app.models.organizers — do NOT import from app.models.recipes (circular).
+          Exported names used by recipe_crud: RecipeModel and all child models.
+      verification:
+        node: |
+          - create_all() creates all 7 tables
+          - create recipe with tags + ingredients + steps -> select -> all sub-entities present
+          - delete recipe -> child rows cascade-deleted
+        edge: |
+          - RecipeSummary.model_validate(recipe_row) includes tags and recipe_category lists
+          - Recipe.model_validate includes recipe_ingredient and recipe_instructions
+      docs: |
+        - Source: mealie/db/models/recipe/recipe.py + ingredient.py + instruction.py + note.py + nutrition.py
+
+    organizer_crud:
+      kind: module
+      defines: "CRUD functions for tags, categories, and tools (same shape for all three)"
+      composed_of: [organizer_orm_models, db_connection, organizer_schema]
+      tier: 3
+      spec:
+        interface: |
+          # app/crud/organizers.py  — functions repeated for tags, categories, tools
+          # (or a generic helper parametrised by model class and schema class)
+
+          def get_tags(db: Session) -> list[RecipeTag]
+          def create_tag(db: Session, item: TagSave) -> RecipeTag
+          def get_tag(db: Session, slug: str) -> RecipeTag
+          def update_tag(db: Session, slug: str, item: TagSave) -> RecipeTag
+          def delete_tag(db: Session, slug: str) -> RecipeTag
+
+          def get_categories(db: Session) -> list[RecipeCategory]
+          def create_category(db: Session, item: CategorySave) -> RecipeCategory
+          def get_category(db: Session, slug: str) -> RecipeCategory
+          def update_category(db: Session, slug: str, item: CategorySave) -> RecipeCategory
+          def delete_category(db: Session, slug: str) -> RecipeCategory
+
+          def get_tools(db: Session) -> list[RecipeTool]
+          def create_tool(db: Session, item: ToolSave) -> RecipeTool
+          def get_tool(db: Session, slug: str) -> RecipeTool
+          def update_tool(db: Session, slug: str, item: ToolSave) -> RecipeTool
+          def delete_tool(db: Session, slug: str) -> RecipeTool
+        contract: |
+          All get-by-slug functions: if not found, raise HTTPException(status_code=404, detail="<Type> not found").
+          All delete functions: return the deleted object (RecipeTag / RecipeCategory / RecipeTool)
+          so the route can return it in the 200 response (matches reference API).
+          Slug generation on create: if item.slug is None, call slugify(item.name, max_length=250).
+          Slug uniqueness: catch IntegrityError from DB -> raise HTTPException(409, "slug already exists").
+          Update: if item.name changes, regenerate slug via slugify (unless item.slug explicitly provided).
+          The LLM may DRY these as a generic function parametrised over (Model, SaveSchema, OutSchema).
+          Import: from slugify import slugify; from sqlalchemy.exc import IntegrityError
+          Do NOT import or redefine get_db here; do NOT import FastAPI beyond HTTPException.
+      verification:
+        node: |
+          - pytest with in-memory SQLite: create, get, update, delete for each type
+          - 404 on unknown slug
+          - 409 on duplicate slug
+        edge: |
+          - returned RecipeTag/Category/Tool pass Pydantic validation
+          - slug auto-generated when not provided
+      docs: |
+        - Source: mealie/repos/repository_generic.py (generic repo) — flattened to plain functions for GDW
+
+    recipe_crud:
+      kind: module
+      defines: "Recipe CRUD: create (slug from name), list (paginated + filtered), get by slug, update (nested replace), delete"
+      composed_of: [recipe_orm_model, organizer_orm_models, db_connection, recipe_schema, organizer_crud]
+      tier: 3
+      spec:
+        interface: |
+          # app/crud/recipes.py
+          def get_recipes(
+            db: Session,
+            page: int = 1,
+            per_page: int = 50,
+            tags: str | None = None,        # comma-separated slugs
+            categories: str | None = None,  # comma-separated slugs
+          ) -> PaginationBase[RecipeSummary]
+
+          def get_recipe(db: Session, slug: str) -> Recipe
+
+          def create_recipe(db: Session, item: CreateRecipe) -> str  # returns slug
+
+          def update_recipe(db: Session, slug: str, data: Recipe) -> Recipe
+
+          def delete_recipe(db: Session, slug: str) -> Recipe
+        contract: |
+          create_recipe:
+            - generate slug: new_slug = slugify(item.name, max_length=250)
+            - catch IntegrityError -> raise HTTPException(409, "recipe with this slug already exists")
+            - create RecipeModel(slug=new_slug, name=item.name, date_added=date.today())
+            - db.add(); db.commit(); db.refresh(); return row.slug
+
+          get_recipe: query by slug; 404 if not found; return Recipe.model_validate(row).
+
+          get_recipes: paginated query ordered by name;
+            if tags provided: split by comma -> join recipes_to_tags -> filter tag.slug IN tag_slugs;
+            if categories provided: split by comma -> join recipes_to_categories -> filter;
+            return PaginationBase[RecipeSummary](
+              page=page, per_page=per_page, total=count, total_pages=ceil(count/per_page),
+              items=[RecipeSummary.model_validate(r) for r in rows]
+            )
+
+          update_recipe:
+            - fetch row by slug; 404 if not found
+            - if data.name changed: new_slug = slugify(data.name); row.slug = new_slug
+            - update scalar fields (name, description, prep_time, cook_time, total_time, recipe_yield)
+            - replace tags: row.tags = [db.get(TagModel, t.id) or get_by_slug(t.slug) for t in data.tags]
+            - replace recipe_category: similar
+            - replace recipe_ingredient: delete existing rows; insert new RecipeIngredientModel rows
+            - replace recipe_instructions: delete existing; insert new in order (set position=idx)
+            - replace notes: delete existing; insert new RecipeNoteModel rows
+            - db.commit(); db.refresh(); return Recipe.model_validate(row)
+
+          delete_recipe: fetch by slug; 404 if not found; result = Recipe.model_validate(row);
+            db.delete(row); db.commit(); return result
+
+          Tag/category resolution during update: look up each organizer by slug from the provided
+          list; ignore unknown slugs gracefully (reference behaviour).
+          Import slugify; import math.ceil for pagination; no FastAPI imports except HTTPException.
+      verification:
+        node: |
+          - pytest: empty list paginated
+          - create returns slug
+          - get by slug returns Recipe
+          - filter by tags
+          - update replaces ingredients
+          - delete returns Recipe and removes from DB
+          - 404 on unknown slug
+        edge: |
+          - PaginationBase total_pages correct
+          - Recipe.tags includes assigned tags after update
+      docs: |
+        - Source: mealie/repos/repository_recipes.py — flattened
+        - multi-tenancy stripped
+        - auth stripped
+
+    api_routes:
+      kind: module
+      defines: "FastAPI app exposing recipe CRUD + organizer (tags/categories/tools) endpoints"
+      composed_of: [fastapi, recipe_crud, organizer_crud, recipe_schema, organizer_schema]
+      tier: 4
+      ports:
+        list_recipes:
+          signature: "GET /recipes -> PaginationBase[RecipeSummary]"
+          kind: call
+          direction: out
+        get_recipe:
+          signature: "GET /recipes/{slug} -> Recipe"
+          kind: call
+          direction: out
+        create_recipe:
+          signature: "POST /recipes (name) -> str (slug)"
+          kind: call
+          direction: out
+        update_recipe:
+          signature: "PUT /recipes/{slug} -> Recipe"
+          kind: call
+          direction: out
+        delete_recipe:
+          signature: "DELETE /recipes/{slug} -> Recipe"
+          kind: call
+          direction: out
+        list_tags:
+          signature: "GET /tags -> RecipeTag[]"
+          kind: call
+          direction: out
+        create_tag:
+          signature: "POST /tags -> RecipeTag"
+          kind: call
+          direction: out
+        list_categories:
+          signature: "GET /categories -> RecipeCategory[]"
+          kind: call
+          direction: out
+        create_category:
+          signature: "POST /categories -> RecipeCategory"
+          kind: call
+          direction: out
+        list_tools:
+          signature: "GET /tools -> RecipeTool[]"
+          kind: call
+          direction: out
+        create_tool:
+          signature: "POST /tools -> RecipeTool"
+          kind: call
+          direction: out
+      spec:
+        interface: |
+          GET    /recipes                    -> PaginationBase[RecipeSummary]  (query: page, per_page, tags, categories)
+          GET    /recipes/{slug}             -> Recipe
+          POST   /recipes                    -> str (slug)                      status_code=201
+          PUT    /recipes/{slug}             -> Recipe
+          DELETE /recipes/{slug}             -> Recipe  (200, not 204)
+
+          GET    /tags                       -> list[RecipeTag]
+          POST   /tags                       -> RecipeTag                       status_code=201
+          GET    /tags/{slug}                -> RecipeTag
+          PUT    /tags/{slug}                -> RecipeTag
+          DELETE /tags/{slug}                -> RecipeTag
+
+          GET    /categories                 -> list[RecipeCategory]
+          POST   /categories                 -> RecipeCategory                  status_code=201
+          GET    /categories/{slug}          -> RecipeCategory
+          PUT    /categories/{slug}          -> RecipeCategory
+          DELETE /categories/{slug}          -> RecipeCategory
+
+          GET    /tools                      -> list[RecipeTool]
+          POST   /tools                      -> RecipeTool                      status_code=201
+          GET    /tools/{slug}               -> RecipeTool
+          PUT    /tools/{slug}               -> RecipeTool
+          DELETE /tools/{slug}               -> RecipeTool
+        contract: |
+          CORS enabled for the frontend origin — import FRONTEND_VITE_PORT from
+          app.config and build allow_origins=[f"http://localhost:{FRONTEND_VITE_PORT}"];
+          do NOT hardcode the port or the origin URL as a string literal.
+          allow_methods=["*"], allow_headers=["*"].
+          Use CORSMiddleware from fastapi.middleware.cors.
+          MUST import the models module: `from app import models` so SQLAlchemy registers ALL ORM
+          models (RecipeModel, TagModel, CategoryModel, ToolModel, + child models) with Base BEFORE
+          calling create_all.
+          MUST call Base.metadata.create_all(bind=engine) at module level (after imports, before
+          app = FastAPI()) — omitting causes OperationalError: no such table.
+          MUST import get_db from app.database — NEVER redefine locally.
+          GET /recipes query params: tags and categories are optional str (comma-separated slugs).
+          POST /recipes returns str (the new slug), not the full Recipe — matches reference contract.
+          DELETE /recipes/{slug} returns the deleted Recipe object with status_code=200 (not 204).
+          Same DELETE pattern for all organizer endpoints (return deleted object, 200).
+          Route ordering: no ambiguity between /recipes and /recipes/{slug} (FastAPI handles correctly).
+          409 from IntegrityError propagates as-is (HTTPException already raised in crud layer).
+      verification:
+        node: |
+          - pytest TestClient: all 20 endpoints return correct status + response shape
+          - 404 on unknown slug
+          - 409 on duplicate slug
+          - pagination correct
+          - tag filter works
+        edge: |
+          - CORS headers present
+          - RecipeSummary returned from GET /recipes matches Recipe from GET /recipes/{slug} on common fields
+      docs: |
+        - Backend public surface — all 20 endpoints
+        - frontend recipe_api_client validated against this contract
+
+    readme:
+      kind: doc
+      defines: "README.md: setup, run, and test instructions for this backend"
+      composed_of: [api_routes]
+      tier: 5
+      spec:
+        interface: |
+          Output: README.md at the component root (NOT under app/) — plain Markdown, not code.
+          Do NOT follow the Python/FastAPI code-style conventions above for this file; those apply
+          to source files only. This file is prose documentation.
+          CRITICAL: output ONLY the Markdown document itself — no preamble narration, no tool-call
+          syntax, no commentary before or after the document (see apps/dispatch/blueprint/backend.graph.yaml's
+          readme node for the real incident this instruction guards against).
+        contract: |
+          Must include, as Markdown sections:
+          - Title + one-paragraph description of what this backend does
+          - Prerequisites: Python version, how to install dependencies
+          - Running the server: exact command (uvicorn app.main:app --reload) and default URL
+            (http://localhost:8003, OpenAPI docs at /docs)
+          - Running tests: exact command (pytest tests/)
+          - API summary: list each endpoint from api_routes' ports below, with method, path, and
+            one-line purpose
+        content_outline: |
+          # <Component name>
+          One paragraph description.
+          ## Prerequisites
+          ## Running the server
+          ## Running tests
+          ## API endpoints
+      verification:
+        node: |
+          - README.md exists at component root
+          - contains headings for prerequisites, running the server, running tests, and API endpoints
+      docs: |
+        - Generated last, same convention as every other ported app's readme
+
+function:
+  exports:
+    - name: list_recipes
+      kind: port
+      from: api_routes.list_recipes
+      signature: "GET /recipes -> PaginationBase[RecipeSummary]"
+    - name: get_recipe
+      kind: port
+      from: api_routes.get_recipe
+      signature: "GET /recipes/{slug} -> Recipe"
+    - name: create_recipe
+      kind: port
+      from: api_routes.create_recipe
+      signature: "POST /recipes (name) -> str (slug)"
+    - name: update_recipe
+      kind: port
+      from: api_routes.update_recipe
+      signature: "PUT /recipes/{slug} -> Recipe"
+    - name: delete_recipe
+      kind: port
+      from: api_routes.delete_recipe
+      signature: "DELETE /recipes/{slug} -> Recipe"
+    - name: list_tags
+      kind: port
+      from: api_routes.list_tags
+      signature: "GET /tags -> RecipeTag[]"
+    - name: create_tag
+      kind: port
+      from: api_routes.create_tag
+      signature: "POST /tags -> RecipeTag"
+    - name: list_categories
+      kind: port
+      from: api_routes.list_categories
+      signature: "GET /categories -> RecipeCategory[]"
+    - name: create_category
+      kind: port
+      from: api_routes.create_category
+      signature: "POST /categories -> RecipeCategory"
+    - name: list_tools
+      kind: port
+      from: api_routes.list_tools
+      signature: "GET /tools -> RecipeTool[]"
+    - name: create_tool
+      kind: port
+      from: api_routes.create_tool
+      signature: "POST /tools -> RecipeTool"
+      comment: |
+        The eleven exports above are the OpenAPI contract that frontend.graph.yaml
+        imports and binds recipe_api_client calls against — see frontend.graph.yaml's
+        function.calls for the consumer side of each contract. The remaining 9 routes
+        (get/update/delete per organizer type) exist in api_routes' own spec.interface
+        above but are not separately exported/consumed, same convention as
+        apps/dispatch/blueprint/backend.graph.yaml's partial-export pattern.
+
+verification:
+  - node: organizer_schema
+    backend: pytest
+    tests: tests/test_schemas.py
+  - node: recipe_schema
+    backend: pytest
+    tests: tests/test_schemas.py
+  - node: organizer_orm_models
+    backend: pytest
+    tests: tests/test_models.py
+  - node: recipe_orm_model
+    backend: pytest
+    tests: tests/test_models.py
+  - node: organizer_crud
+    backend: pytest
+    tests: tests/test_organizer_routes.py
+  - node: recipe_crud
+    backend: pytest
+    tests: tests/test_recipe_routes.py
+  - node: api_routes
+    backend: pytest
+    tests: tests/test_recipe_routes.py

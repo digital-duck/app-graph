@@ -1,0 +1,1065 @@
+# ── Unified Duality Graph Schema v2.1 — Software Profile ────────────────────
+# Migrated from graph-driven-workflow/apps/SPL/conduit/components/backend/graph.yaml
+# (v1 primitives/concepts/tier schema -> form.primitives/form.nodes).
+domain: software/backend/fastapi
+target_languages: [python]
+comment: |
+  FastAPI backend: JWT auth, social articles (CRUD + tags + favorites + comments),
+  follow/unfollow profiles — a RealWorld-spec ("Conduit") clone. Largest and most
+  structurally complex ported app so far: two ORM-model modules with a
+  self-referential many-to-many (`follows`) and two more junction tables
+  (`articles_to_tags`, `favorites`), a JWT+bcrypt auth layer shared by every
+  route via required/optional dependency injection, and 18 routes spanning
+  auth, profiles, articles, favorites, comments, and tags.
+capstone: api_routes
+
+tech_profile: python_fastapi
+port: ${{ settings.BACKEND_FASTAPI_PORT }}
+
+# Source of truth for id/version/domain_type — see
+# docs/DEV/BUILD/refactoring-plan-v1.md §1.1.
+blueprint:
+  id: conduit_backend
+  schema_version: "2.2"
+  graph_schema_version: "2.1"
+  domain_type: software
+  provenance: authored
+  parent_blueprint: null
+  lineage: []
+
+form:
+  primitives:
+    python:
+      defines: |
+        - Python 3.11+ runtime and standard library
+      tier: 0
+      kind: config
+    sqlite:
+      defines: |
+        - SQLite embedded relational database
+      tier: 0
+      kind: config
+    fastapi:
+      defines: |
+        - FastAPI web framework: routing, dependency injection, OpenAPI
+      tier: 0
+      kind: config
+    sqlalchemy:
+      defines: |
+        - SQLAlchemy 2.0 ORM: declarative models, relationships, session management
+      tier: 0
+      kind: config
+    pydantic:
+      defines: |
+        - Pydantic v2: runtime data validation via type hints
+      tier: 0
+      kind: config
+    pyjwt:
+      defines: |
+        - PyJWT: JSON Web Token encode/decode (HS256)
+      tier: 0
+      kind: config
+    bcrypt_lib:
+      defines: |
+        - bcrypt: password hashing and verification (use import bcrypt directly — NOT passlib)
+      tier: 0
+      kind: config
+    slugify:
+      defines: |
+        - python-slugify: convert text to URL-safe slugs
+      tier: 0
+      kind: config
+  nodes:
+    requirements:
+      kind: doc
+      defines: |
+        - requirements.txt: pinned pip dependencies for this backend
+      composed_of: [python, sqlite, fastapi, sqlalchemy, pydantic, pyjwt, bcrypt_lib, slugify]
+      tier: 1
+      spec:
+        interface: |
+          Output: requirements.txt at the component root (NOT under app/) — plain pip
+          requirements format, one package per line, not Python code.
+        contract: |
+          List the pip packages needed to install and run this backend, with minimum-version
+          pins (>=): fastapi, sqlalchemy, pydantic, pydantic[email] (EmailStr validation needs
+          the email-validator extra), PyJWT (pip package name is "PyJWT", capitalized, even
+          though the import is `import jwt`), bcrypt (import bcrypt directly, not passlib),
+          python-slugify (pip package name for the slugify primitive), uvicorn[standard]
+          (needed to run the server, uvicorn app.main:app, even though never imported
+          directly), pytest, httpx (needed to run this component's test suite). One package
+          per line, e.g. `fastapi>=0.111.0`. No comments, no section headers, no pip install
+          command.
+      verification:
+        node: |
+          - requirements.txt exists at component root
+          - contains fastapi, sqlalchemy, pydantic, pydantic[email], PyJWT, bcrypt,
+            python-slugify, uvicorn, pytest, httpx
+      docs: |
+        - Generated early (depends only on primitives), same convention as
+          apps/dispatch/blueprint/backend.graph.yaml
+    data_schema:
+      kind: concept
+      defines: |
+        - All Pydantic v2 schemas for users, profiles, articles, comments, and tags
+      composed_of: [pydantic, python]
+      tier: 1
+      spec:
+        interface: |
+          # app/schemas.py
+          from datetime import datetime
+          from typing import Optional
+          from pydantic import BaseModel, EmailStr, ConfigDict
+
+          # ── User / Auth ──────────────────────────────────────────────────────
+          class UserRegister(BaseModel):
+              username: str
+              email: EmailStr
+              password: str
+
+          class UserLogin(BaseModel):
+              email: EmailStr
+              password: str
+
+          class UserUpdate(BaseModel):             # all fields optional
+              email: EmailStr | None = None
+              password: str | None = None
+              bio: str | None = None
+              image: str | None = None
+
+          class UserResponse(BaseModel):           # returned by all auth endpoints
+              username: str
+              email: str
+              bio: str = ""
+              image: str | None = None
+              token: str                           # JWT included in every response
+
+          # ── Profile ─────────────────────────────────────────────────────────
+          class ProfileResponse(BaseModel):
+              username: str
+              bio: str = ""
+              image: str | None = None
+              following: bool = False
+
+          # ── Article ─────────────────────────────────────────────────────────
+          class ArticleCreate(BaseModel):
+              title: str
+              description: str
+              body: str
+              tagList: list[str] = []
+
+          class ArticleUpdate(BaseModel):          # all fields optional
+              title: str | None = None
+              description: str | None = None
+              body: str | None = None
+
+          class ArticleResponse(BaseModel):
+              slug: str
+              title: str
+              description: str
+              body: str
+              tagList: list[str]
+              createdAt: datetime
+              updatedAt: datetime
+              favorited: bool
+              favoritesCount: int
+              author: ProfileResponse
+
+          class ArticleListResponse(BaseModel):
+              articles: list[ArticleResponse]
+              articlesCount: int
+
+          # ── Comment ─────────────────────────────────────────────────────────
+          class CommentCreate(BaseModel):
+              body: str
+
+          class CommentResponse(BaseModel):
+              id: int
+              body: str
+              createdAt: datetime
+              updatedAt: datetime
+              author: ProfileResponse
+
+          class CommentListResponse(BaseModel):
+              comments: list[CommentResponse]
+
+          # ── Tag ─────────────────────────────────────────────────────────────
+          class TagListResponse(BaseModel):
+              tags: list[str]
+        contract: |
+          UserResponse always includes `token` — it is regenerated for GET /user as well as login/register.
+          hashed_password and salt are NOT present on any response schema — only on the ORM model.
+          ArticleResponse.tagList is sorted for deterministic output (sorted(tags)).
+          ArticleResponse.createdAt / updatedAt: use datetime field name with capital A and T to match
+            Conduit spec camelCase convention. Pydantic will serialize/deserialize these correctly.
+          ArticleCreate.title: validated non-empty (strip + raise ValueError if empty after strip).
+          UserRegister.username: validated non-empty (strip + reject empty).
+          UserUpdate: all fields optional; password field triggers re-hash in crud layer.
+          ProfileResponse.following: computed per-request; not stored in DB.
+          ArticleListResponse.articlesCount must equal len(articles).
+      verification:
+        node: |
+          - import all schemas
+          - UserResponse has token field
+          - ArticleResponse has author: ProfileResponse
+          - no hashed_password in UserResponse
+          - ArticleCreate rejects empty title
+        edge: |
+          - ArticleResponse.author type is ProfileResponse
+          - CommentResponse.author type is ProfileResponse
+      docs: |
+        - Flat responses (no nested envelopes)
+        - camelCase fields for Article/Comment match Conduit spec
+        - no source file maps directly — synthesized from domain models
+    db_connection:
+      kind: concept
+      defines: |
+        - SQLAlchemy engine + session factory + Base bound to conduit.db
+      composed_of: [sqlalchemy, sqlite, python]
+      tier: 1
+      spec:
+        interface: |
+          # app/database.py
+          from sqlalchemy import create_engine
+          from sqlalchemy.orm import sessionmaker, declarative_base, Session
+          from typing import Generator
+
+          DATABASE_URL = "sqlite:///./conduit.db"
+          engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+          SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+          Base = declarative_base()
+
+          def get_db() -> Generator[Session, None, None]:
+              db = SessionLocal()
+              try:
+                  yield db
+              finally:
+                  db.close()
+        contract: |
+          DATABASE_URL = "sqlite:///./conduit.db"
+          `check_same_thread=False` required for SQLite with FastAPI.
+          `Base` from `declarative_base()` (legacy-style; compatible with existing GDW node pattern).
+          `get_db()` uses try/finally to ensure session close.
+          Exports: engine, SessionLocal, Base, get_db
+      verification:
+        node: |
+          - engine.connect() succeeds
+          - session opens and closes
+          - Base has no tables yet
+        edge: |
+          - Base imported by user_orm_model and article_orm_model for model declarations
+      docs: |
+        - Same pattern as todo/expense/kanban/mealie
+        - only DATABASE_URL and filename differ
+    security_module:
+      kind: concept
+      defines: |
+        - JWT token creation/verification and bcrypt password hashing/verification
+      composed_of: [pyjwt, bcrypt_lib, python]
+      tier: 1
+      spec:
+        interface: |
+          # app/security.py
+          from datetime import datetime, timezone, timedelta
+          import bcrypt
+          import jwt
+
+          ALGORITHM = "HS256"
+          SECRET_KEY = "conduit-dev-secret-key-change-in-production"
+          ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7    # 7 days (matches reference)
+
+          def create_access_token(username: str) -> str:
+              ...
+          def get_username_from_token(token: str) -> str:
+              ...
+          def get_password_hash(password: str) -> str:
+              ...
+          def verify_password(plain_password: str, hashed_password: str) -> bool:
+              ...
+        contract: |
+          CRITICAL: Use `import bcrypt` directly. Do NOT use passlib (incompatible with bcrypt>=4).
+          get_password_hash: return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+          verify_password: return bcrypt.checkpw(plain_password.encode(), hashed_password.encode())
+          create_access_token:
+            payload = {"username": username, "exp": datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)}
+            return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
+          get_username_from_token:
+            payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+            username = payload.get("username")
+            if not username: raise ValueError("malformed token payload")
+            return username
+            On jwt.InvalidTokenError or KeyError: raise ValueError("invalid token")
+          JWT payload key is "username" (NOT "sub") — this is the Conduit convention.
+          ALGORITHM and SECRET_KEY exported for use in auth_deps.
+      verification:
+        node: |
+          - token = create_access_token('alice')
+          - payload = jwt.decode(token, SECRET_KEY, [ALGORITHM])
+          - assert payload['username'] == 'alice'
+          - verify_password round-trip
+          - get_username_from_token('alice') round-trip
+          - invalid token raises ValueError
+        edge: |
+          - auth_deps imports SECRET_KEY + ALGORITHM from security_module
+          - auth_deps calls get_username_from_token
+      docs: |
+        - Same bcrypt pattern as fullstack
+        - JWT payload key differs (username vs sub)
+    user_orm_model:
+      kind: concept
+      defines: |
+        - SQLAlchemy ORM model for UserModel + follows junction table
+      composed_of: [db_connection, sqlalchemy, python]
+      tier: 2
+      spec:
+        interface: |
+          # app/models/users.py
+          from sqlalchemy import Column, Integer, String, Table, ForeignKey
+          from sqlalchemy.orm import relationship
+          from app.database import Base
+
+          # Many-to-many self-referential: user follows user
+          follows = Table(
+              "follows",
+              Base.metadata,
+              Column("follower_id", Integer, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True),
+              Column("followed_id", Integer, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True),
+          )
+
+          class UserModel(Base):
+              __tablename__ = "users"
+              id:              Column(Integer, primary_key=True, autoincrement=True)
+              username:        Column(String, unique=True, nullable=False, index=True)
+              email:           Column(String, unique=True, nullable=False, index=True)
+              bio:             Column(String, nullable=False, default="")
+              image:           Column(String, nullable=True)
+              hashed_password: Column(String, nullable=False, default="")
+
+              # Self-referential M2M: who this user follows
+              following: Mapped[list["UserModel"]] = relationship(
+                  "UserModel",
+                  secondary=follows,
+                  primaryjoin=id == follows.c.follower_id,
+                  secondaryjoin=id == follows.c.followed_id,
+                  lazy="select",
+              )
+        contract: |
+          id is INTEGER autoincrement (not UUID string like fullstack) — matches Conduit reference schema.
+          username column: unique=True, index=True (primary lookup key).
+          email column: unique=True, index=True.
+          hashed_password: stored after bcrypt hashing; no separate salt column (bcrypt embeds salt).
+          `follows` Table: declared at module level; uses ondelete="CASCADE" so deleting a user
+            removes their follow relationships automatically.
+          `following` relationship: primaryjoin = follower_id == this user's id (who THIS user follows).
+            NOT the followers of this user — direction matters.
+          Do NOT import articles_to_tags or favorites here — those live in article_orm_model.
+          Exported names used elsewhere: UserModel, follows
+      verification:
+        node: |
+          - create_all() creates users + follows tables
+          - insert user
+          - hashed_password stored
+          - user.following list accessible
+        edge: |
+          - user_crud imports UserModel + follows
+          - article_crud imports follows for feed query
+      docs: |
+        - Source: app/db/migrations + app/models/domain/users.py
+        - GDW removes salt column, uses INTEGER PK
+    article_orm_model:
+      kind: concept
+      defines: |
+        - SQLAlchemy ORM models for ArticleModel + CommentModel + junction tables (tags, favorites)
+      composed_of: [db_connection, user_orm_model, sqlalchemy, python]
+      tier: 2
+      spec:
+        interface: |
+          # app/models/articles.py
+          from datetime import datetime
+          from sqlalchemy import (Column, Integer, String, Text, DateTime, Table,
+                                  ForeignKey, func)
+          from sqlalchemy.orm import relationship, Mapped
+          from app.database import Base
+          from app.models.users import UserModel  # CRITICAL: the module is app/models/users.py
+                                                    # (the ORM model's OWN filename), NOT
+                                                    # app/models/user_orm_model.py — the string
+                                                    # "user_orm_model" is only this dependency's
+                                                    # blueprint-graph node id, never a real path.
+
+          # Article ↔ tag (string, not a separate ORM entity)
+          articles_to_tags = Table(
+              "articles_to_tags",
+              Base.metadata,
+              Column("article_id", Integer, ForeignKey("articles.id", ondelete="CASCADE"), primary_key=True),
+              Column("tag", String, primary_key=True),
+          )
+
+          # User ↔ article favorites
+          favorites = Table(
+              "favorites",
+              Base.metadata,
+              Column("user_id", Integer, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True),
+              Column("article_id", Integer, ForeignKey("articles.id", ondelete="CASCADE"), primary_key=True),
+          )
+
+          class ArticleModel(Base):
+              __tablename__ = "articles"
+              id:          Column(Integer, primary_key=True, autoincrement=True)
+              slug:        Column(String, unique=True, nullable=False, index=True)
+              title:       Column(String, nullable=False)
+              description: Column(Text, nullable=False, default="")
+              body:        Column(Text, nullable=False, default="")
+              author_id:   Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+              created_at:  Column(DateTime, server_default=func.now(), nullable=False)
+              updated_at:  Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+
+              author:      Mapped["UserModel"] = relationship("UserModel", back_populates=None, lazy="joined")
+              favorited_by: Mapped[list["UserModel"]] = relationship(
+                  "UserModel", secondary=favorites, lazy="select"
+              )
+
+          class CommentModel(Base):
+              __tablename__ = "comments"
+              id:          Column(Integer, primary_key=True, autoincrement=True)
+              body:        Column(Text, nullable=False)
+              author_id:   Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+              article_id:  Column(Integer, ForeignKey("articles.id", ondelete="CASCADE"), nullable=False)
+              created_at:  Column(DateTime, server_default=func.now(), nullable=False)
+              updated_at:  Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+
+              author: Mapped["UserModel"] = relationship("UserModel", lazy="joined")
+        contract: |
+          tags stored in articles_to_tags(article_id, tag) — `tag` is a plain string column.
+            No TagModel class; no ForeignKey into a tags table. This is the string-tag pattern.
+          favorites: junction table (user_id, article_id) — both columns are part of composite PK.
+          ArticleModel.favorited_by: relationship to UserModel via favorites table; lazy="select"
+            so article_crud can count len(article.favorited_by) or do a db query for count.
+          ArticleModel.created_at / updated_at: DateTime columns with server defaults.
+            SQLite stores as TIMESTAMP; created_at filled on INSERT; updated_at refreshes on UPDATE.
+          CommentModel.author: relationship to UserModel; lazy="joined" for efficient loading.
+          Import Base from app.database — do NOT redefine Base here.
+          Import UserModel from app.models.users (the file path, i.e. `from app.models.users
+            import UserModel`) — do NOT import from app.models.user_orm_model (that is this
+            dependency's node id in the blueprint graph, not its actual file path) and do NOT
+            import from app.models.articles (circular).
+          Exported names: ArticleModel, CommentModel, articles_to_tags, favorites
+          MUST be imported by api_routes (via `from app.models import articles`) before create_all.
+      verification:
+        node: |
+          - create_all() creates articles, comments, articles_to_tags, favorites tables
+          - insert article with author
+          - insert comment
+          - delete article → comment cascade-deleted
+        edge: |
+          - article_crud imports ArticleModel + CommentModel + articles_to_tags + favorites
+          - article.favorited_by list accessible
+      docs: |
+        - Source: app/db/migrations main_tables.py (articles, commentaries, articles_to_tags, favorites)
+        - GDW uses ORM instead of raw SQL
+    auth_deps:
+      kind: module
+      defines: |
+        - FastAPI dependency functions: JWT decode → required or optional current user
+      composed_of: [user_orm_model, security_module, data_schema, fastapi]
+      tier: 3
+      spec:
+        interface: |
+          # app/deps.py
+          from typing import Annotated, Optional
+          from fastapi import Depends, HTTPException, status
+          from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+          from sqlalchemy.orm import Session
+          from app.database import get_db
+          from app.models.users import UserModel
+          from app.security import get_username_from_token
+
+          bearer_scheme = HTTPBearer(auto_error=False)
+
+          def get_current_user(
+              credentials: Annotated[Optional[HTTPAuthorizationCredentials], Depends(bearer_scheme)],
+              db: Session = Depends(get_db),
+          ) -> UserModel:
+              ...
+
+          def get_current_user_optional(
+              credentials: Annotated[Optional[HTTPAuthorizationCredentials], Depends(bearer_scheme)],
+              db: Session = Depends(get_db),
+          ) -> Optional[UserModel]:
+              ...
+
+          CurrentUser = Annotated[UserModel, Depends(get_current_user)]
+          OptionalUser = Annotated[Optional[UserModel], Depends(get_current_user_optional)]
+        contract: |
+          Use HTTPBearer(auto_error=False) — does NOT raise 403 on missing token; returns None instead.
+            This allows the same scheme to serve both required and optional auth.
+
+          get_current_user (required):
+            1. if credentials is None → raise HTTPException(401, "Authentication required")
+            2. token = credentials.credentials
+            3. try: username = get_username_from_token(token)
+               except ValueError → raise HTTPException(403, "Could not validate credentials")
+            4. user = db.query(UserModel).filter(UserModel.username == username).first()
+            5. if user is None → raise HTTPException(404, "User not found")
+            6. return user
+
+          get_current_user_optional (optional):
+            1. if credentials is None → return None
+            2. token = credentials.credentials
+            3. try: username = get_username_from_token(token)
+               except ValueError → raise HTTPException(403, "Could not validate credentials")
+               NOTE: invalid token raises 403 even in optional mode (token present but broken)
+            4. user = db.query(UserModel).filter(UserModel.username == username).first()
+            5. return user  (None if not found — do NOT raise 404 in optional mode)
+
+          CurrentUser type alias used in route functions that require auth.
+          OptionalUser type alias used in route functions with optional auth (GET /articles, etc.)
+          `bearer_scheme` is exported so api_routes can reference the OpenAPI security scheme.
+      verification:
+        node: |
+          - no token → get_current_user raises 401
+          - valid token → returns UserModel
+          - invalid token → 403
+          - optional: no token → None
+          - optional: valid token → UserModel
+          - optional: invalid token → 403
+        edge: |
+          - oauth2 scheme tokenUrl not needed (not OAuth2)
+          - api_routes uses CurrentUser + OptionalUser type aliases
+      docs: |
+        - Source: app/api/dependencies/authentication.py
+        - GDW uses HTTPBearer instead of OAuth2PasswordBearer
+    user_crud:
+      kind: module
+      defines: |
+        - CRUD functions for user registration/login/update and profile follow/unfollow
+      composed_of: [user_orm_model, security_module, data_schema, sqlalchemy]
+      tier: 3
+      spec:
+        interface: |
+          # app/crud/users.py
+          from sqlalchemy.orm import Session
+          from app.models.users import UserModel, follows
+          from app.schemas import (UserRegister, UserLogin, UserUpdate,
+                                    UserResponse, ProfileResponse)
+          from app.security import get_password_hash, verify_password, create_access_token
+
+          def register_user(db: Session, user_in: UserRegister) -> UserResponse:
+              ...
+          def login_user(db: Session, user_in: UserLogin) -> UserResponse:
+              ...
+          def get_current_user_response(db: Session, user: UserModel) -> UserResponse:
+              ...
+          def update_user(db: Session, user: UserModel, user_update: UserUpdate) -> UserResponse:
+              ...
+          def get_profile(db: Session, username: str,
+                          current_user: UserModel | None) -> ProfileResponse:
+              ...
+          def follow_user(db: Session, current_user: UserModel,
+                          username: str) -> ProfileResponse:
+              ...
+          def unfollow_user(db: Session, current_user: UserModel,
+                            username: str) -> ProfileResponse:
+              ...
+        contract: |
+          register_user:
+            - check username taken: db.query(UserModel).filter_by(username=user_in.username).first()
+              → if exists: raise HTTPException(400, "username already taken")
+            - check email taken: filter_by(email=user_in.email).first()
+              → if exists: raise HTTPException(400, "email already taken")
+            - hashed = get_password_hash(user_in.password)
+            - new_user = UserModel(username=..., email=..., bio="", hashed_password=hashed)
+            - db.add(new_user); db.commit(); db.refresh(new_user)
+            - token = create_access_token(new_user.username)
+            - return UserResponse(username=..., email=..., bio=..., image=..., token=token)
+
+          login_user:
+            - user = db.query(UserModel).filter_by(email=user_in.email).first()
+            - if user is None or not verify_password(user_in.password, user.hashed_password):
+                raise HTTPException(400, "Incorrect email or password")
+            - token = create_access_token(user.username)
+            - return UserResponse(...)
+
+          get_current_user_response:
+            - regenerate token: token = create_access_token(user.username)
+            - return UserResponse(...)
+            Note: GET /user also returns a fresh token (Conduit spec).
+
+          update_user:
+            - if user_update.email and user_update.email != user.email:
+                check uniqueness → 400 if taken
+            - update fields (only non-None fields from UserUpdate)
+            - if user_update.password: user.hashed_password = get_password_hash(user_update.password)
+            - db.commit(); db.refresh(user)
+            - return UserResponse(..., token=create_access_token(user.username))
+
+          get_profile:
+            - target = db.query(UserModel).filter_by(username=username).first()
+            - if not target: raise HTTPException(404, "Profile not found")
+            - following = False
+            - if current_user is not None:
+                following = (db.query(follows).filter_by(
+                  follower_id=current_user.id, followed_id=target.id).first() is not None)
+            - return ProfileResponse(username=target.username, bio=target.bio,
+                image=target.image, following=following)
+
+          follow_user:
+            - target = db.query(UserModel).filter_by(username=username).first()
+            - if not target: raise HTTPException(404, "Profile not found")
+            - if target.id == current_user.id: raise HTTPException(400, "Cannot follow yourself")
+            - already = db.query(follows).filter_by(follower_id=current_user.id,
+                followed_id=target.id).first()
+            - if not already:
+                db.execute(follows.insert().values(follower_id=current_user.id,
+                                                    followed_id=target.id))
+                db.commit()
+            - return ProfileResponse(..., following=True)
+
+          unfollow_user:
+            - target = ...; 404 if not found
+            - db.execute(follows.delete().where(
+                (follows.c.follower_id == current_user.id) &
+                (follows.c.followed_id == target.id)))
+            - db.commit()
+            - return ProfileResponse(..., following=False)
+
+          No FastAPI imports except HTTPException.
+          All DB mutations committed before returning response.
+      verification:
+        node: |
+          - pytest: register returns UserResponse with token
+          - duplicate username/email → 400
+          - login correct → UserResponse
+          - login wrong password → 400
+          - get_profile following=False for strangers
+          - follow→True
+          - unfollow→False
+          - update_user changes email
+          - update_user re-hashes password
+        edge: |
+          - create_access_token called with username
+          - verify_password called in login_user
+          - follows table used in follow/unfollow
+      docs: |
+        - Source: app/db/repositories/users.py + app/services/authentication.py + app/api/routes/authentication.py + profiles.py
+    article_crud:
+      kind: module
+      defines: |
+        - CRUD for articles, comments, tags, and favorites — all with per-user computed fields
+      composed_of: [article_orm_model, user_orm_model, user_crud, db_connection, data_schema, slugify, sqlalchemy]
+      tier: 3
+      spec:
+        interface: |
+          # app/crud/articles.py
+          from sqlalchemy.orm import Session
+          from sqlalchemy import select, func as sqlfunc
+          from app.models.articles import ArticleModel, CommentModel, articles_to_tags, favorites
+          from app.models.users import UserModel, follows
+          from app.schemas import (ArticleCreate, ArticleUpdate, ArticleResponse,
+                                    ArticleListResponse, CommentCreate, CommentResponse,
+                                    CommentListResponse, TagListResponse, ProfileResponse)
+          from slugify import slugify
+
+          def _build_article_response(
+              db: Session, article: ArticleModel,
+              current_user: UserModel | None
+          ) -> ArticleResponse:
+              ...
+
+          def create_article(db: Session, article_in: ArticleCreate,
+                             author: UserModel) -> ArticleResponse:
+              ...
+          def get_article(db: Session, slug: str,
+                          current_user: UserModel | None) -> ArticleResponse:
+              ...
+          def list_articles(db: Session, tag: str | None, author: str | None,
+                            favorited: str | None, limit: int, offset: int,
+                            current_user: UserModel | None) -> ArticleListResponse:
+              ...
+          def get_feed(db: Session, current_user: UserModel,
+                       limit: int, offset: int) -> ArticleListResponse:
+              ...
+          def update_article(db: Session, slug: str, article_update: ArticleUpdate,
+                             current_user: UserModel) -> ArticleResponse:
+              ...
+          def delete_article(db: Session, slug: str, current_user: UserModel) -> None:
+              ...
+          def favorite_article(db: Session, slug: str,
+                               current_user: UserModel) -> ArticleResponse:
+              ...
+          def unfavorite_article(db: Session, slug: str,
+                                 current_user: UserModel) -> ArticleResponse:
+              ...
+          def get_comments(db: Session, slug: str,
+                           current_user: UserModel | None) -> CommentListResponse:
+              ...
+          def add_comment(db: Session, slug: str, comment_in: CommentCreate,
+                          current_user: UserModel) -> CommentResponse:
+              ...
+          def delete_comment(db: Session, slug: str, comment_id: int,
+                             current_user: UserModel) -> None:
+              ...
+          def get_all_tags(db: Session) -> TagListResponse:
+              ...
+        contract: |
+          _build_article_response (private helper):
+            - tags: db.execute(select(articles_to_tags.c.tag).where(
+                articles_to_tags.c.article_id == article.id)).scalars().all()
+              sorted(tags) for deterministic order.
+            - favorites_count: db.execute(select(sqlfunc.count()).where(
+                favorites.c.article_id == article.id)).scalar()
+            - favorited: False if current_user is None else (
+                db.execute(select(favorites).where(
+                  (favorites.c.article_id == article.id) &
+                  (favorites.c.user_id == current_user.id))).first() is not None)
+            - author_following: False if current_user is None else (
+                db.execute(select(follows).where(
+                  (follows.c.follower_id == current_user.id) &
+                  (follows.c.followed_id == article.author_id))).first() is not None)
+            - author = ProfileResponse(username=article.author.username,
+                bio=article.author.bio, image=article.author.image,
+                following=author_following)
+            - return ArticleResponse(slug=..., title=..., description=..., body=...,
+                tagList=sorted_tags, createdAt=..., updatedAt=...,
+                favorited=favorited, favoritesCount=favorites_count, author=author)
+
+          create_article:
+            - slug = slugify(article_in.title)
+            - if db.query(ArticleModel).filter_by(slug=slug).first():
+                raise HTTPException(400, "article with this title already exists")
+            - new_article = ArticleModel(slug=slug, title=article_in.title,
+                description=article_in.description, body=article_in.body,
+                author_id=author.id)
+            - db.add(new_article); db.flush()  # to get new_article.id
+            - deduplicated_tags = list(dict.fromkeys(article_in.tagList))  # preserve order, dedup
+            - for tag in deduplicated_tags:
+                db.execute(articles_to_tags.insert().values(
+                  article_id=new_article.id, tag=tag))
+            - db.commit(); db.refresh(new_article)
+            - return _build_article_response(db, new_article, author)
+
+          get_article:
+            - article = db.query(ArticleModel).filter_by(slug=slug).first()
+            - if not article: raise HTTPException(404, "Article not found")
+            - return _build_article_response(db, article, current_user)
+
+          list_articles:
+            - query = db.query(ArticleModel)
+            - if tag:
+                query = query.join(articles_to_tags,
+                  ArticleModel.id == articles_to_tags.c.article_id).filter(
+                  articles_to_tags.c.tag == tag)
+            - if author:
+                query = query.join(UserModel,
+                  ArticleModel.author_id == UserModel.id).filter(
+                  UserModel.username == author)
+            - if favorited:
+                fav_user = db.query(UserModel).filter_by(username=favorited).first()
+                if fav_user:
+                    query = query.join(favorites,
+                      ArticleModel.id == favorites.c.article_id).filter(
+                      favorites.c.user_id == fav_user.id)
+                else: query = query.filter(False)  # no results if user not found
+            - total = query.count()
+            - articles = query.order_by(ArticleModel.created_at.desc(), ArticleModel.id.desc()).offset(offset).limit(limit).all()
+            - return ArticleListResponse(
+                articles=[_build_article_response(db, a, current_user) for a in articles],
+                articlesCount=total)
+
+          get_feed:
+            - followed_ids subquery:
+                db.execute(select(follows.c.followed_id).where(
+                  follows.c.follower_id == current_user.id)).scalars().all()
+            - articles = db.query(ArticleModel).filter(
+                ArticleModel.author_id.in_(followed_ids)
+              ).order_by(ArticleModel.created_at.desc(), ArticleModel.id.desc()).offset(offset).limit(limit).all()
+            - total = db.query(ArticleModel).filter(
+                ArticleModel.author_id.in_(followed_ids)).count()
+            - return ArticleListResponse(articles=[...], articlesCount=total)
+
+          update_article:
+            - article = db.query(ArticleModel).filter_by(slug=slug).first()
+            - if not article: raise HTTPException(404, "Article not found")
+            - if article.author_id != current_user.id: raise HTTPException(403, "Not the author")
+            - if article_update.title and article_update.title != article.title:
+                new_slug = slugify(article_update.title)
+                if db.query(ArticleModel).filter_by(slug=new_slug).first():
+                    raise HTTPException(400, "article with this title already exists")
+                article.slug = new_slug
+                article.title = article_update.title
+            - if article_update.description is not None:
+                article.description = article_update.description
+            - if article_update.body is not None:
+                article.body = article_update.body
+            - db.commit(); db.refresh(article)
+            - return _build_article_response(db, article, current_user)
+
+          delete_article:
+            - article = ...; 404 if not found
+            - if article.author_id != current_user.id: raise HTTPException(403, "Not the author")
+            - db.delete(article); db.commit()
+            (cascade on DB will delete comments + tags + favorites)
+
+          favorite_article:
+            - article = ...; 404 if not found
+            - already = db.execute(select(favorites).where(
+                (favorites.c.user_id == current_user.id) &
+                (favorites.c.article_id == article.id))).first()
+            - if not already:
+                db.execute(favorites.insert().values(
+                  user_id=current_user.id, article_id=article.id))
+                db.commit()
+            - return _build_article_response(db, article, current_user)
+
+          unfavorite_article:
+            - article = ...; 404 if not found
+            - db.execute(favorites.delete().where(
+                (favorites.c.user_id == current_user.id) &
+                (favorites.c.article_id == article.id)))
+            - db.commit()
+            - return _build_article_response(db, article, current_user)
+
+          add_comment:
+            - article = db.query(ArticleModel).filter_by(slug=slug).first()
+            - if not article: raise HTTPException(404, "Article not found")
+            - comment = CommentModel(body=comment_in.body, author_id=current_user.id,
+                article_id=article.id)
+            - db.add(comment); db.commit(); db.refresh(comment)
+            - following = (db.execute(select(follows).where(
+                (follows.c.follower_id == current_user.id) &
+                (follows.c.followed_id == comment.author_id))).first() is not None)
+            - author = ProfileResponse(username=current_user.username,
+                bio=current_user.bio, image=current_user.image, following=following)
+            - return CommentResponse(id=comment.id, body=comment.body,
+                createdAt=comment.created_at, updatedAt=comment.updated_at, author=author)
+
+          get_comments:
+            - article = db.query(ArticleModel).filter_by(slug=slug).first()
+            - if not article: raise HTTPException(404, "Article not found")
+            - comments = db.query(CommentModel).filter_by(article_id=article.id).all()
+            - return CommentListResponse(comments=[...build each CommentResponse...])
+
+          delete_comment:
+            - article = ...; 404 if not found
+            - comment = db.query(CommentModel).filter_by(id=comment_id, article_id=article.id).first()
+            - if not comment: raise HTTPException(404, "Comment not found")
+            - if comment.author_id != current_user.id: raise HTTPException(403, "Not the author")
+            - db.delete(comment); db.commit()
+
+          get_all_tags:
+            - rows = db.execute(select(articles_to_tags.c.tag).distinct()).scalars().all()
+            - return TagListResponse(tags=sorted(rows))
+
+          Import slugify from slugify; no FastAPI except HTTPException.
+      verification:
+        node: |
+          - pytest: create article → slug correct
+          - get by slug
+          - list with tag filter
+          - list with author filter
+          - list with favorited filter
+          - feed shows followed authors' articles
+          - update slug changes on title change
+          - delete cascades
+          - favorite sets favorited=True
+          - comment create + list + delete
+          - tags listed
+        edge: |
+          - _build_article_response: favorited/favoritesCount/following computed correctly
+          - list_articles articlesCount equals len(articles)
+      docs: |
+        - Source: app/db/repositories/articles.py + comments.py + tags.py
+        - GDW flattens async repos to sync functions
+    api_routes:
+      kind: module
+      defines: |
+        - FastAPI application: all 18 routes, CORS, startup create_all
+      composed_of: [auth_deps, user_crud, article_crud, data_schema, db_connection, fastapi]
+      tier: 4
+      spec:
+        interface: |
+          # app/main.py
+          from fastapi import FastAPI, Depends, HTTPException, Response, status
+          from fastapi.middleware.cors import CORSMiddleware
+          from sqlalchemy.orm import Session
+          from app.config import FRONTEND_VITE_PORT
+          from app.database import engine, Base, get_db
+          from app.models import articles as _articles_models  # registers Article/Comment tables
+          from app.models import users as _users_models        # registers User tables
+          from app.schemas import (UserRegister, UserLogin, UserUpdate,
+                                    UserResponse, ProfileResponse,
+                                    ArticleCreate, ArticleUpdate,
+                                    ArticleResponse, ArticleListResponse,
+                                    CommentCreate, CommentResponse,
+                                    CommentListResponse, TagListResponse)
+          from app.deps import CurrentUser, OptionalUser
+          from app.crud.users import (register_user, login_user,
+                                       get_current_user_response, update_user,
+                                       get_profile, follow_user, unfollow_user)
+          from app.crud.articles import (create_article, get_article,
+                                          list_articles, get_feed,
+                                          update_article, delete_article,
+                                          favorite_article, unfavorite_article,
+                                          get_comments, add_comment,
+                                          delete_comment, get_all_tags)
+
+          Base.metadata.create_all(bind=engine)
+          app = FastAPI(title="Conduit API")
+          app.add_middleware(CORSMiddleware,
+              allow_origins=[f"http://localhost:{FRONTEND_VITE_PORT}"],
+              allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+
+          # ── Auth ─────────────────────────────────────────────────────────────
+          @app.post("/users", response_model=UserResponse, status_code=201)
+          @app.post("/users/login", response_model=UserResponse)
+          @app.get("/user", response_model=UserResponse)
+          @app.put("/user", response_model=UserResponse)
+
+          # ── Profiles ─────────────────────────────────────────────────────────
+          @app.get("/profiles/{username}", response_model=ProfileResponse)
+          @app.post("/profiles/{username}/follow", response_model=ProfileResponse)
+          @app.delete("/profiles/{username}/follow", response_model=ProfileResponse)
+
+          # ── Articles ─────────────────────────────────────────────────────────
+          @app.get("/articles", response_model=ArticleListResponse)
+          @app.get("/articles/feed", response_model=ArticleListResponse)
+          @app.post("/articles", response_model=ArticleResponse, status_code=201)
+          @app.get("/articles/{slug}", response_model=ArticleResponse)
+          @app.put("/articles/{slug}", response_model=ArticleResponse)
+          @app.delete("/articles/{slug}", status_code=204)
+
+          # ── Favorites ────────────────────────────────────────────────────────
+          @app.post("/articles/{slug}/favorite", response_model=ArticleResponse)
+          @app.delete("/articles/{slug}/favorite", response_model=ArticleResponse)
+
+          # ── Comments ─────────────────────────────────────────────────────────
+          @app.get("/articles/{slug}/comments", response_model=CommentListResponse)
+          @app.post("/articles/{slug}/comments", response_model=CommentResponse, status_code=201)
+          @app.delete("/articles/{slug}/comments/{comment_id}", status_code=204)
+
+          # ── Tags ─────────────────────────────────────────────────────────────
+          @app.get("/tags", response_model=TagListResponse)
+        contract: |
+          CRITICAL startup order — this file is the ONLY file this node may output. Do NOT
+          also emit an app/models/__init__.py file (a second markdown code block); register
+          both ORM model submodules by importing them directly in THIS file instead:
+
+            from app.models import articles as _articles_models
+            from app.models import users as _users_models
+
+          These two imports must appear BEFORE `Base.metadata.create_all(bind=engine)` —
+          importing each submodule is what registers its tables with Base.metadata; the
+          submodules themselves are otherwise unused directly in this file (their symbols
+          are consumed via app.crud, not imported here for direct use), so the assigned
+          names are prefixed with `_` and never referenced again after the import line.
+          Missing either import → OperationalError: no such table for that model's tables.
+          Do NOT rely on `from app import models` alone — app/models/ has no __init__.py
+          in this migration, so that alone would import an empty namespace package and
+          registers no tables.
+
+          CORS: import FRONTEND_VITE_PORT from app.config and build
+            allow_origins=[f"http://localhost:{FRONTEND_VITE_PORT}"]; do NOT hardcode
+            the port number; allow_credentials=True.
+
+          Route bodies (all thin — delegate to crud layer):
+
+            POST /users: register_user(db, user_in)
+            POST /users/login: login_user(db, user_in)
+            GET /user: get_current_user_response(db, current_user)  [CurrentUser dep]
+            PUT /user: update_user(db, current_user, user_update)   [CurrentUser dep]
+
+            GET /profiles/{username}: get_profile(db, username, current_user)  [OptionalUser dep]
+            POST /profiles/{username}/follow: follow_user(db, current_user, username)  [CurrentUser]
+            DELETE /profiles/{username}/follow: unfollow_user(db, current_user, username) [CurrentUser]
+
+            GET /articles: list_articles(db, tag, author, favorited, limit, offset, current_user)
+              [OptionalUser; query params: tag=None, author=None, favorited=None, limit=20, offset=0]
+            GET /articles/feed: get_feed(db, current_user, limit, offset) [CurrentUser]
+            POST /articles: create_article(db, article_in, current_user) [CurrentUser; status_code=201]
+            GET /articles/{slug}: get_article(db, slug, current_user) [OptionalUser]
+            PUT /articles/{slug}: update_article(db, slug, article_update, current_user) [CurrentUser]
+            DELETE /articles/{slug}: delete_article(db, slug, current_user); return Response(status_code=204)
+              [CurrentUser; MUST return explicit Response(status_code=204) not None]
+
+            POST /articles/{slug}/favorite: favorite_article(db, slug, current_user) [CurrentUser]
+            DELETE /articles/{slug}/favorite: unfavorite_article(db, slug, current_user) [CurrentUser]
+
+            GET /articles/{slug}/comments: get_comments(db, slug, current_user) [OptionalUser]
+            POST /articles/{slug}/comments: add_comment(db, slug, comment_in, current_user) [CurrentUser; 201]
+            DELETE /articles/{slug}/comments/{comment_id}: delete_comment(db, slug, comment_id, current_user)
+              return Response(status_code=204)  [CurrentUser]
+
+            GET /tags: get_all_tags(db)
+
+          Route ordering CRITICAL:
+            GET /articles/feed must be registered BEFORE GET /articles/{slug}
+            otherwise FastAPI matches "feed" as a slug path parameter.
+
+          DELETE routes that return 204 MUST return an explicit Response(status_code=204)
+            (not return None) — FastAPI requires explicit Response for 204.
+
+          Do NOT create an `app/models/__init__.py` file — this node's ONLY output is
+          app/main.py itself (see the CRITICAL startup order note above for how table
+          registration is handled without one).
+      verification:
+        node: |
+          - pytest TestClient: POST /users → 201 + UserResponse
+          - POST /users/login → 200
+          - GET /user with token → UserResponse
+          - GET /articles → ArticleListResponse
+          - GET /articles/feed requires token
+          - 401 on missing token for protected routes
+          - 204 on DELETE
+        edge: |
+          - CORS headers present
+          - GET /articles/feed registered before GET /articles/{slug}
+          - create_all succeeds
+          - all 18 routes accessible
+      docs: |
+        - Backend public surface — all 18 endpoints
+        - thin route layer delegates to crud functions
+    readme:
+      kind: doc
+      defines: |
+        - README.md: setup, run, and API reference for this backend component
+      composed_of: [api_routes]
+      tier: 5
+      spec:
+        interface: |
+          Output: README.md at the component root — plain Markdown, not code.
+        contract: |
+          Must include, as Markdown sections:
+          - Title + one-paragraph description (Conduit RealWorld backend: JWT auth, social
+            articles with tags/favorites/comments, follow/unfollow profiles)
+          - Setup: pip install -r requirements.txt
+          - Run: uvicorn app.main:app --reload --port 8007
+          - API reference: all 18 routes grouped by resource (Auth, Profiles, Articles,
+            Favorites, Comments, Tags), with method, path, and one-line description
+          - Auth: how to obtain a token (POST /users or /users/login) and how to send it
+            (Authorization: Bearer <token>)
+          - Testing: pytest tests/
+          CRITICAL: this backend covers exactly the resources above — users, profiles,
+          articles, comments, tags, favorites, follows. Do NOT mention todos, expenses,
+          kanban cards, recipes, or any other resource type from unrelated sibling apps in
+          this same repo's apps/ directory.
+        content_outline: |
+          # conduit_backend
+          One paragraph description.
+          ## Setup
+          ## Run
+          ## Auth
+          ## API
+          ## Testing
+      verification:
+        node: |
+          - README.md exists at component root
+          - contains a Setup section, a Run section, an Auth section, and all 18 routes
+      docs: |
+        - Same convention as apps/dispatch/blueprint/backend.graph.yaml's readme node
+
+verification:
+  - node: api_routes
+    backend: pytest
+    tests: tests/test_auth_routes.py, tests/test_profile_routes.py, tests/test_article_routes.py
+  - node: data_schema
+    backend: pytest
+    tests: tests/test_data_schemas.py

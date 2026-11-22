@@ -1,0 +1,398 @@
+# ── Unified Duality Graph Schema v2.1 — Software Profile ────────────────────
+# Migrated from graph-driven-workflow/apps/SPL/fastapi/components/backend/graph.yaml
+# (v1 primitives/concepts/tier schema -> form.primitives/form.nodes).
+domain: software/backend/fastapi
+target_languages: [python]
+comment: |
+  FastAPI + SQLAlchemy 2.0 Item CRUD API — backend-only Path-B migration of
+  example-fastapi-sqlachemy-pytest (Tim Hughes example). Smallest of the
+  ported reference apps: a single entity (Item) with an Integer autoincrement
+  PK (the first ported app NOT to use a UUID PK) and a DB-level UNIQUE
+  constraint on `name`, exercised via a second lookup axis (get_item_by_name)
+  and 409-on-conflict checks in both create and update.
+capstone: api_routes
+
+tech_profile: python_fastapi
+port: ${{ settings.BACKEND_FASTAPI_PORT }}
+
+# Source of truth for id/version/domain_type — see
+# docs/DEV/BUILD/refactoring-plan-v1.md §1.1.
+blueprint:
+  id: fastapi_backend
+  schema_version: "2.2"
+  graph_schema_version: "2.1"
+  domain_type: software
+  provenance: authored
+  parent_blueprint: null
+  lineage: []
+
+form:
+  primitives:
+    python:
+      defines: "Python 3.11+ runtime and standard library"
+      tier: 0
+      kind: config
+    sqlite:
+      defines: "SQLite embedded relational database"
+      tier: 0
+      kind: config
+    fastapi:
+      defines: "FastAPI web framework: routing, dependency injection, OpenAPI"
+      tier: 0
+      kind: config
+    sqlalchemy:
+      defines: "SQLAlchemy 2.0 ORM: declarative models, unique constraints, session management"
+      tier: 0
+      kind: config
+    pydantic:
+      defines: "Pydantic v2: runtime data validation, field validators, from_attributes"
+      tier: 0
+      kind: config
+
+  nodes:
+    requirements:
+      kind: doc
+      defines: "requirements.txt: pinned pip dependencies for this backend"
+      composed_of: [python, sqlite, fastapi, sqlalchemy, pydantic]
+      tier: 1
+      spec:
+        interface: |
+          Output: requirements.txt at the component root (NOT under app/) — plain pip
+          requirements format, one package per line, not Python code.
+        contract: |
+          List the pip packages needed to install and run this backend, with minimum-version
+          pins (>=): fastapi, sqlalchemy, pydantic, uvicorn[standard] (needed to run the
+          server, uvicorn app.main:app, even though never imported directly), pytest, httpx
+          (needed to run this component's test suite). One package per line, e.g.
+          `fastapi>=0.111.0`. No comments, no section headers, no pip install command.
+      verification:
+        node: |
+          - requirements.txt exists at component root
+          - contains fastapi, sqlalchemy, pydantic, uvicorn, pytest, httpx
+      docs: |
+        - Generated early (depends only on primitives), same convention as apps/dispatch/blueprint/backend.graph.yaml
+
+    data_schema:
+      kind: concept
+      defines: "Pydantic v2 schemas for item CRUD: ItemBase, ItemCreate, ItemUpdate, ItemPublic"
+      composed_of: [pydantic, python]
+      tier: 1
+      spec:
+        interface: |
+          # app/schemas.py
+          from pydantic import BaseModel, ConfigDict, field_validator
+
+          class ItemBase(BaseModel):
+              name: str
+              description: str | None = None
+
+              @field_validator("name")
+              @classmethod
+              def validate_name(cls, v: str) -> str: ...
+
+          class ItemCreate(ItemBase):
+              pass
+
+          class ItemUpdate(BaseModel):
+              name: str | None = None
+              description: str | None = None
+
+              @field_validator("name")
+              @classmethod
+              def validate_name(cls, v: str | None) -> str | None: ...
+
+          class ItemPublic(ItemBase):
+              model_config = ConfigDict(from_attributes=True)
+              id: int
+        contract: |
+          ItemPublic exposes id (int), name (str), description (str | None).
+          ItemBase.validate_name / ItemUpdate.validate_name: strip whitespace; raise
+          ValueError if the stripped result is empty. On ItemUpdate the validator only runs
+          when name is not None (name stays optional — an omitted name is not an error).
+          ItemPublic.model_config = ConfigDict(from_attributes=True) — must be constructible
+          directly from ORM Item instances (FastAPI response_model=ItemPublic on an Item row).
+      verification:
+        node: |
+          - ItemCreate(name="Widget") succeeds
+          - ItemCreate(name="") raises ValidationError (via ValueError from validate_name)
+          - ItemCreate(name="   ") raises ValidationError
+          - ItemUpdate() with all fields omitted succeeds
+          - ItemPublic.model_validate(item_orm_instance) works
+        edge: |
+          - crud_operations imports ItemCreate, ItemUpdate
+          - api_routes imports ItemPublic for response_model on every route
+      docs: |
+        - Source: src/example/schemas/item.py — modernised from Pydantic v1 (orm_mode, .dict())
+          to v2 (ConfigDict(from_attributes=True), field_validator)
+
+    db_connection:
+      kind: concept
+      defines: "SQLAlchemy 2.0 engine, DeclarativeBase, get_db generator, SessionDep annotation"
+      composed_of: [sqlalchemy, sqlite, python]
+      tier: 1
+      spec:
+        interface: |
+          # app/database.py
+          from collections.abc import Generator
+          from typing import Annotated
+          from fastapi import Depends
+          from sqlalchemy import create_engine
+          from sqlalchemy.orm import DeclarativeBase, Session
+
+          DATABASE_URL = "sqlite:///./fastapi_items.db"
+          engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+
+          class Base(DeclarativeBase):
+              pass
+
+          def get_db() -> Generator[Session, None, None]: ...
+
+          SessionDep = Annotated[Session, Depends(get_db)]
+        contract: |
+          engine uses a SQLite file-based DB (tests override with an in-memory engine via
+          FastAPI dependency_overrides[get_db] — do not hardcode the DB path anywhere else).
+          Base is the shared DeclarativeBase; orm_model inherits Item from Base.
+          get_db yields exactly one Session per call, inside a `with Session(engine) as
+          session:` block, so the session closes automatically on generator exit.
+          SessionDep = Annotated[Session, Depends(get_db)] — the shorthand routes use.
+      verification:
+        node: |
+          - from app.database import Base, engine, get_db, SessionDep
+          - str(engine.url) contains "sqlite"
+        edge: |
+          - Base imported by orm_model
+          - get_db overridden in tests via app.dependency_overrides[get_db]
+      docs: |
+        - Source: src/example/db/session.py — replaces scoped_session/sessionmaker with a
+          SQLAlchemy 2.0 Session context manager
+
+    orm_model:
+      kind: concept
+      defines: "SQLAlchemy ORM model for Item: Integer autoincrement PK, unique name, optional description"
+      composed_of: [db_connection, sqlalchemy]
+      tier: 2
+      spec:
+        interface: |
+          # app/models.py
+          from sqlalchemy import Column, Integer, String
+          from app.database import Base
+
+          class Item(Base):
+              __tablename__ = "items"
+
+              id = Column(Integer, primary_key=True, autoincrement=True, index=True)
+              name = Column(String, unique=True, nullable=False, index=True)
+              description = Column(String, nullable=True)
+        contract: |
+          Item.__tablename__ = "items".
+          id: Integer, primary_key=True, autoincrement=True — the DB assigns id on insert;
+          the CRUD layer must never set id manually.
+          name: String, unique=True, nullable=False — a DB-level UNIQUE constraint. A raw
+          duplicate insert raises sqlalchemy.exc.IntegrityError; the CRUD layer is
+          responsible for checking for conflicts BEFORE insert/update and raising
+          HTTPException(409) instead of letting IntegrityError propagate.
+          description: String, nullable=True — may be None.
+          No created_at / updated_at columns — none in the source, none added here.
+      verification:
+        node: |
+          - Item(name="Widget") instantiates
+          - Item.__tablename__ == "items"
+          - id, name, description columns exist on the class
+        edge: |
+          - crud_operations imports Item
+          - api_routes uses Item only indirectly, via crud_operations
+      docs: |
+        - Source: src/example/models/item.py — renamed ItemModel -> Item (no Model suffix,
+          SQLAlchemy 2.0 convention); Integer PK kept as-is
+
+    crud_operations:
+      kind: module
+      defines: "6 CRUD functions for Item: get_item, get_item_by_name, list_items, create_item, update_item, delete_item"
+      composed_of: [orm_model, data_schema, sqlalchemy]
+      tier: 3
+      spec:
+        interface: |
+          # app/crud.py
+          from sqlalchemy.orm import Session
+          from fastapi import HTTPException
+          from app.models import Item
+          from app.schemas import ItemCreate, ItemUpdate
+
+          def get_item(session: Session, *, item_id: int) -> Item | None: ...
+          def get_item_by_name(session: Session, *, name: str) -> Item | None: ...
+          def list_items(session: Session, *, skip: int = 0, limit: int = 100) -> list[Item]: ...
+          def create_item(session: Session, *, item_in: ItemCreate) -> Item: ...
+          def update_item(session: Session, *, db_item: Item, item_in: ItemUpdate) -> Item: ...
+          def delete_item(session: Session, *, db_item: Item) -> None: ...
+        contract: |
+          All 6 functions take keyword-only arguments after `session` (the `*,` marker).
+
+          get_item: session.get(Item, item_id) -> Item | None.
+          get_item_by_name: session.query(Item).filter(Item.name == name).first() -> Item | None.
+          list_items: session.query(Item).offset(skip).limit(limit).all() -> list, never raises.
+
+          create_item:
+            1. existing = get_item_by_name(session, name=item_in.name)
+            2. if existing: raise HTTPException(status_code=409, detail="Item with this name already exists")
+            3. db_item = Item(name=item_in.name, description=item_in.description)
+            4. session.add(db_item); session.commit(); session.refresh(db_item)
+            5. return db_item
+
+          update_item:
+            1. data = item_in.model_dump(exclude_unset=True)
+            2. if "name" in data:
+                 existing = get_item_by_name(session, name=data["name"])
+                 if existing and existing.id != db_item.id:
+                     raise HTTPException(status_code=409, detail="Item with this name already exists")
+                 # renaming to the SAME name (existing.id == db_item.id) must NOT raise — no-op rename is allowed
+            3. for field, value in data.items(): setattr(db_item, field, value)
+            4. session.commit(); session.refresh(db_item); return db_item
+
+          delete_item:
+            session.delete(db_item); session.commit()
+            Returns None — the caller (api_routes) returns Response(status_code=204).
+
+          CRUD functions raise HTTPException directly (not a custom exception type);
+          api_routes does not re-catch or translate it.
+        engine:
+          type: state_machine
+          note: |
+            create_item and update_item are 2-step check-then-act sequences against the
+            unique `name` constraint — treat each as: read (get_item_by_name) -> decide
+            (409 or proceed) -> write (insert/update). No transaction-level locking; the
+            DB's own UNIQUE constraint is the backstop, this check is purely for a clean
+            409 instead of a raw IntegrityError leaking to the client.
+      verification:
+        node: |
+          - create_item creates a row and returns it with a non-None id
+          - get_item returns it by id; get_item_by_name returns it by name
+          - list_items respects skip/limit and returns [] when empty
+          - update_item changes the target field(s); a no-op rename to the same name succeeds
+          - delete_item removes the row (subsequent get_item returns None)
+          - create_item with a duplicate name raises HTTPException(409)
+          - update_item renaming to another item's existing name raises HTTPException(409)
+        edge: |
+          - api_routes imports all 6 functions from crud_operations
+      docs: |
+        - Source: src/example/crud/item.py — adds delete_item (absent in source) and the
+          conflict check (source's crud silently produced IntegrityError); SQLAlchemy 2.0 style
+
+    api_routes:
+      kind: module
+      defines: "FastAPI app with 6 CRUD routes under /api/v1/items; startup table creation; CORS"
+      composed_of: [crud_operations, db_connection, data_schema, fastapi]
+      tier: 4
+      spec:
+        interface: |
+          # app/main.py
+          from fastapi import FastAPI, HTTPException
+          from fastapi.middleware.cors import CORSMiddleware
+          from fastapi.responses import Response
+
+          app = FastAPI(title="FastAPI SQLAlchemy Example", version="0.1.0")
+          # CORS middleware: allow_origins=["*"]
+          # startup: Base.metadata.create_all(engine)
+
+          # Router prefix=/api/v1/items, routes in THIS order:
+          POST   /api/v1/items/               -> ItemPublic (status_code=201)
+          GET    /api/v1/items/                -> list[ItemPublic]
+          GET    /api/v1/items/by-name/{name}  -> ItemPublic
+          GET    /api/v1/items/{item_id: int}  -> ItemPublic
+          PUT    /api/v1/items/{item_id: int}  -> ItemPublic
+          DELETE /api/v1/items/{item_id: int}  -> Response(status_code=204)
+        contract: |
+          Use APIRouter(prefix="/api/v1/items") included into app.
+          Startup: @app.on_event("startup") def on_startup(): Base.metadata.create_all(engine)
+          CORS: CORSMiddleware(allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+
+          CRITICAL ROUTE ORDER: /by-name/{name} MUST be registered BEFORE /{item_id} in the
+          router. (FastAPI's int-coerced path converter on {item_id} means they don't
+          actually collide at runtime, but the declaration order is still part of the
+          contract — declare /by-name/{name} first.)
+
+          POST /api/v1/items/ (status_code=201):
+            return create_item(session, item_in=item_in)   # raises 409 on duplicate name
+
+          GET /api/v1/items/ (query params: skip: int = 0, limit: int = 100):
+            return list_items(session, skip=skip, limit=limit)
+
+          GET /api/v1/items/by-name/{name}:
+            item = get_item_by_name(session, name=name)
+            if not item: raise HTTPException(404, "Item not found")
+            return item
+
+          GET /api/v1/items/{item_id}:
+            item = get_item(session, item_id=item_id)
+            if not item: raise HTTPException(404, "Item not found")
+            return item
+
+          PUT /api/v1/items/{item_id}:
+            item = get_item(session, item_id=item_id)
+            if not item: raise HTTPException(404, "Item not found")
+            return update_item(session, db_item=item, item_in=item_in)   # raises 409 on name conflict
+
+          DELETE /api/v1/items/{item_id}:
+            item = get_item(session, item_id=item_id)
+            if not item: raise HTTPException(404, "Item not found")
+            delete_item(session, db_item=item)
+            return Response(status_code=204)
+      verification:
+        node: |
+          - POST returns 201 with an ItemPublic body
+          - GET list returns 200 with [] when empty
+          - GET by-id returns 404 on a missing id
+          - GET by-name returns 404 on a missing name
+          - PUT returns 200 on success
+          - DELETE returns 204
+          - POST/PUT with a conflicting name returns 409
+        edge: |
+          - imports crud_operations (all 6 functions), db_connection (SessionDep, engine, Base),
+            data_schema (ItemPublic, ItemCreate, ItemUpdate)
+      docs: |
+        - Source: src/example/routers/item.py — the source only implemented POST; GET/PUT/DELETE
+          raised NotImplementedError. This migration completes all 6 routes, the primary value
+          of the migration per graph-driven-workflow/apps/SPL/fastapi/BRIEF.md §2.
+
+    readme:
+      kind: doc
+      defines: "README.md: setup, run, and API reference for this backend component"
+      composed_of: [api_routes]
+      tier: 5
+      spec:
+        interface: |
+          Output: README.md at the component root — plain Markdown, not code.
+        contract: |
+          Must include, as Markdown sections:
+          - Title + one-paragraph description (FastAPI + SQLAlchemy Item CRUD API)
+          - Setup: pip install -r requirements.txt
+          - Run: uvicorn app.main:app --reload --port 8005
+          - API reference: all 6 routes with method, path, and one-line description
+          - Testing: pytest tests/
+          CRITICAL: this backend has exactly ONE resource type, Item, and exactly the 6
+          /api/v1/items/* routes listed in api_routes' own contract above. Do NOT mention
+          todos, expenses, tasks, kanban cards, boards, or any other resource type anywhere
+          in this document, even in passing or as a comparison — those are unrelated sibling
+          apps in this same repo's apps/ directory and have no connection to this component.
+          If you find yourself writing about anything other than Item, stop and re-read the
+          api_routes contract above.
+        content_outline: |
+          # fastapi_backend
+          One paragraph description.
+          ## Setup
+          ## Run
+          ## API
+          ## Testing
+      verification:
+        node: |
+          - README.md exists at component root
+          - contains a Setup section, a Run section, and all 6 routes
+      docs: |
+        - Same convention as apps/dispatch/blueprint/backend.graph.yaml's readme node
+
+verification:
+  - node: api_routes
+    backend: pytest
+    tests: tests/test_routes_items.py
+  - node: crud_operations
+    backend: pytest
+    tests: tests/test_crud_items.py

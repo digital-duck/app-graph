@@ -1,0 +1,640 @@
+# ── Unified Duality Graph Schema v2.1 — Software Profile ────────────────────
+# Migrated from graph-driven-workflow/apps/SPL/mealie/components/frontend/graph.yaml
+domain: software/frontend/vue
+target_languages: [typescript]
+comment: |
+  Vue 3 / TypeScript frontend: recipe API client, recipe + organizer
+  components, stateful dashboard with list/detail/form view-routing —
+  first ported app with a dual-mode form (create vs edit) and a
+  three-way view state machine, neither of which apps/todo/, apps/dispatch/,
+  nor apps/expense/ needed. Reference repo uses Nuxt 3 + Vuetify; this port
+  targets Vue 3 + Vite (GDW's standard stack) — each component is
+  re-specified from the reference behaviour, not the reference Nuxt code.
+capstone: RecipeDashboard
+
+tech_profile: vue_typescript
+port: ${{ settings.FRONTEND_VITE_PORT }}
+
+blueprint:
+  id: mealie_recipe_frontend
+  schema_version: "2.3"
+  graph_schema_version: "2.1"
+  domain_type: software
+  provenance: authored
+  parent_blueprint: null
+  lineage: []
+
+imports:
+  - id: backend
+    graph: ./backend.graph.yaml
+    comment: |
+      The backend REST API is a mandatory dependency. recipe_api_client's
+      calls are verified against a subset of backend's exported endpoint
+      contracts below.
+
+form:
+  primitives:
+    vuejs:
+      defines: "Vue 3: reactive component system, Composition API, directives"
+      tier: 0
+      kind: config
+    typescript:
+      defines: "TypeScript: static types, interfaces, generics"
+      tier: 0
+      kind: config
+    vite:
+      defines: "Vite: dev server, HMR, module bundler"
+      tier: 0
+      kind: config
+
+  nodes:
+    recipe_api_client:
+      kind: module
+      defines: "TypeScript fetch wrappers for all recipe and organizer API endpoints"
+      composed_of: [typescript]
+      tier: 1
+      ports:
+        list_recipes:
+          signature: "GET /recipes -> PaginationResponse<RecipeSummary>"
+          kind: call
+          direction: out
+        get_recipe:
+          signature: "GET /recipes/{slug} -> Recipe"
+          kind: call
+          direction: out
+        create_recipe:
+          signature: "POST /recipes (name) -> str (slug)"
+          kind: call
+          direction: out
+        update_recipe:
+          signature: "PUT /recipes/{slug} -> Recipe"
+          kind: call
+          direction: out
+        delete_recipe:
+          signature: "DELETE /recipes/{slug} -> Recipe"
+          kind: call
+          direction: out
+        list_tags:
+          signature: "GET /tags -> RecipeTag[]"
+          kind: call
+          direction: out
+        create_tag:
+          signature: "POST /tags -> RecipeTag"
+          kind: call
+          direction: out
+        list_categories:
+          signature: "GET /categories -> RecipeCategory[]"
+          kind: call
+          direction: out
+        create_category:
+          signature: "POST /categories -> RecipeCategory"
+          kind: call
+          direction: out
+        list_tools:
+          signature: "GET /tools -> RecipeTool[]"
+          kind: call
+          direction: out
+        create_tool:
+          signature: "POST /tools -> RecipeTool"
+          kind: call
+          direction: out
+      spec:
+        interface: |
+          # src/api.ts
+          export type UUID = string
+
+          export interface RecipeTag      { id: UUID; slug: string; name: string }
+          export interface RecipeCategory { id: UUID; slug: string; name: string }
+          export interface RecipeTool     { id: UUID; slug: string; name: string; on_hand: boolean }
+          export interface RecipeIngredient { quantity: number | null; unit: string | null; food: string | null; note: string | null; display: string }
+          export interface RecipeStep     { id: UUID; title: string; text: string }
+          export interface RecipeNote     { title: string; text: string }
+          export interface Nutrition      { calories?: string; fatContent?: string; proteinContent?: string }
+          export interface RecipeSummary  { slug: string; name: string; description?: string; tags: RecipeTag[]; recipe_category: RecipeCategory[]; tools: RecipeTool[] }
+          export interface Recipe extends RecipeSummary {
+            recipe_ingredient: RecipeIngredient[]
+            recipe_instructions: RecipeStep[]
+            notes: RecipeNote[]
+            nutrition?: Nutrition
+          }
+          export interface PaginationResponse<T> { page: number; per_page: number; total: number; total_pages: number; items: T[] }
+          export interface TagSave      { name: string; slug?: string }
+          export interface CategorySave { name: string; slug?: string }
+          export interface ToolSave     { name: string; slug?: string; on_hand?: boolean }
+
+          export async function getRecipes(params?: { page?: number; per_page?: number; tags?: string; categories?: string }): Promise<PaginationResponse<RecipeSummary>>
+          export async function getRecipe(slug: string): Promise<Recipe>
+          export async function createRecipe(name: string): Promise<string>           // returns slug
+          export async function updateRecipe(slug: string, data: Partial<Recipe>): Promise<Recipe>
+          export async function deleteRecipe(slug: string): Promise<Recipe>
+
+          export async function getTags(): Promise<RecipeTag[]>
+          export async function createTag(item: TagSave): Promise<RecipeTag>
+          export async function deleteTag(slug: string): Promise<RecipeTag>
+
+          export async function getCategories(): Promise<RecipeCategory[]>
+          export async function createCategory(item: CategorySave): Promise<RecipeCategory>
+          export async function deleteCategory(slug: string): Promise<RecipeCategory>
+
+          export async function getTools(): Promise<RecipeTool[]>
+          export async function createTool(item: ToolSave): Promise<RecipeTool>
+          export async function deleteTool(slug: string): Promise<RecipeTool>
+        contract: |
+          const BASE_URL = import.meta.env.VITE_API_BASE_URL
+          getRecipes: GET ${BASE_URL}/recipes with query params serialised as ?page=1&per_page=50&tags=slug&categories=slug
+            (omit params with undefined value); returns PaginationResponse<RecipeSummary>.
+          getRecipe: GET ${BASE_URL}/recipes/${slug}; returns Recipe.
+          createRecipe: POST ${BASE_URL}/recipes with JSON { name }; response is a plain string (the slug), NOT JSON object.
+          updateRecipe: PUT ${BASE_URL}/recipes/${slug} with JSON body; returns updated Recipe.
+          deleteRecipe: DELETE ${BASE_URL}/recipes/${slug}; returns deleted Recipe (status 200).
+          getTags: GET ${BASE_URL}/tags; returns RecipeTag[] (not paginated for simplicity — reference paginates).
+          createTag: POST ${BASE_URL}/tags with JSON body; returns RecipeTag (status 201).
+          deleteTag: DELETE ${BASE_URL}/tags/${slug}; returns deleted RecipeTag.
+          Same pattern for categories and tools.
+          All functions: if (!response.ok) throw new Error(`HTTP ${response.status}`).
+          Content-Type: application/json on POST and PUT.
+          IMPORTANT: createRecipe returns a plain text slug, not JSON — use response.text() not .json().
+      verification:
+        node: |
+          - all functions exported
+          - types exported
+          - PaginationResponse<RecipeSummary> type exported
+        edge: |
+          - HTTP methods and paths match backend api_routes contract
+          - createRecipe uses text() not json()
+      docs: |
+        - Source: mealie/frontend/app/lib/api/user/recipes/recipe.ts, organizer-tags.ts, organizer-categories.ts, organizer-tools.ts
+
+    RecipeCard:
+      kind: component
+      defines: "Purely presentational recipe card: shows title, description, tag chips"
+      composed_of: [vuejs, typescript]
+      tier: 2
+      spec:
+        interface: |
+          Props:
+            recipe: RecipeSummary
+          Emits:
+            click(slug: string)
+            delete(slug: string)
+          Template:
+            <div>
+              <h3 @click="$emit('click', recipe.slug)">{{ recipe.name }}</h3>
+              <p v-if="recipe.description">{{ recipe.description }}</p>
+              <span v-for="tag in recipe.tags" :key="tag.id">{{ tag.name }}</span>
+              <button @click.stop="$emit('delete', recipe.slug)">Delete</button>
+            </div>
+        contract: |
+          No fetch calls — purely presentational.
+          Click on title/card body -> emit('click', recipe.slug).
+          Delete button -> emit('delete', recipe.slug); @click.stop to avoid triggering click event.
+          Tags rendered as inline chips (span elements); no click handler on tags.
+          Import RecipeSummary from '../api'.
+      verification:
+        node: |
+          - mount with recipe prop
+          - verify name rendered
+          - click title -> 'click' emitted with slug
+          - click delete -> 'delete' emitted with slug
+          - no api calls
+        edge: |
+          - emits carry recipe.slug
+          - delete does not trigger click event
+      docs: |
+        - Source: mealie/frontend/app/components/Domain/Recipe/RecipeCard.vue (simplified)
+
+    OrganizerFilter:
+      kind: component
+      defines: "v-model-compatible filter dropdown for selecting a tag or category"
+      composed_of: [vuejs, typescript]
+      tier: 2
+      spec:
+        interface: |
+          Props:
+            modelValue: string             (slug of selected organizer; '' = all)
+            options: Array<{ slug: string; name: string }>  (available organizers)
+            label: string                  (e.g. 'Filter by Tag', 'Filter by Category')
+          Emits: update:modelValue(slug: string)
+          Template:
+            <select :value="modelValue"
+                    @change="$emit('update:modelValue', ($event.target as HTMLSelectElement).value)">
+              <option value="">{{ label }}</option>
+              <option v-for="opt in options" :key="opt.slug" :value="opt.slug">{{ opt.name }}</option>
+            </select>
+        contract: |
+          v-model compatible: emits 'update:modelValue' when selection changes.
+          First option: value='' -> "all" (clears filter); text = label prop.
+          No internal state — fully controlled by parent via modelValue prop.
+          Mirrors CategoryFilter from expense + StatusSelect from kanban — same v-model pattern.
+          Accepts generic { slug, name } options — works for tags, categories, and tools.
+      verification:
+        node: |
+          - mount with options=[{slug:'vegetarian',name:'Vegetarian'}]
+          - verify option rendered
+          - change -> update:modelValue emitted with slug
+          - first option value='' renders label
+        edge: |
+          - no api calls
+          - parent can v-model bind
+          - no internal state mutation
+      docs: |
+        - Third instance of the v-model filter pattern across GDW apps (CategoryFilter -> StatusSelect -> OrganizerFilter)
+
+    RecipeIngredientList:
+      kind: component
+      defines: "Purely presentational ingredient list — renders quantity, unit, food, and note"
+      composed_of: [vuejs, typescript]
+      tier: 2
+      spec:
+        interface: |
+          Props:
+            ingredients: RecipeIngredient[]
+          Template:
+            <ul>
+              <li v-for="(ing, idx) in ingredients" :key="idx">
+                <span v-if="ing.quantity">{{ ing.quantity }}</span>
+                <span v-if="ing.unit">{{ ing.unit }}</span>
+                <span v-if="ing.food">{{ ing.food }}</span>
+                <span v-if="ing.note">({{ ing.note }})</span>
+                <span v-if="!ing.quantity && !ing.food">{{ ing.display }}</span>
+              </li>
+            </ul>
+            <p v-if="ingredients.length === 0">No ingredients.</p>
+        contract: |
+          No fetch calls; no emits — purely display.
+          When quantity/food both null: fall back to display field.
+          Empty list shows "No ingredients." message.
+          Import RecipeIngredient from '../api'.
+      verification:
+        node: |
+          - mount with ingredients prop
+          - verify list items rendered
+          - empty array -> shows 'No ingredients.'
+        edge: |
+          - no api calls
+          - no emits
+      docs: |
+        - New pattern: first GDW component that renders a nested sub-entity list
+
+    RecipeForm:
+      kind: component
+      defines: "Dual-mode form: create (name only) or edit (full recipe fields)"
+      composed_of: [vuejs, typescript, recipe_api_client]
+      tier: 3
+      spec:
+        interface: |
+          Props:
+            recipe: Recipe | null         (null = create mode; Recipe = edit mode)
+          Emits:
+            saved(slug: string)
+            cancelled()
+          State:
+            name: Ref<string>
+            description: Ref<string>
+            newIngredient: Ref<{ quantity: string; unit: string; food: string; note: string }>
+            ingredients: Ref<RecipeIngredient[]>
+            steps: Ref<Array<{title: string; text: string}>>
+        contract: |
+          On mount (onMounted): if recipe prop is not null, populate all fields from recipe data.
+          Create mode (recipe == null): submit calls createRecipe(name.value); emit('saved', slug).
+          Edit mode (recipe != null): submit calls updateRecipe(recipe.slug, { name, description,
+            recipe_ingredient: ingredients, recipe_instructions: steps }); emit('saved', result.slug).
+          Name field is required; alert on empty.
+          "Add ingredient" button appends to ingredients list from newIngredient fields; clears fields after add.
+          "Add step" button appends text area to steps list.
+          Cancel button: emit('cancelled').
+          Import createRecipe, updateRecipe, Recipe from '../api'.
+      verification:
+        node: |
+          - create mode: mock createRecipe
+          - fill name
+          - submit -> createRecipe called -> saved emitted with slug
+          - edit mode: pre-populated fields
+          - submit -> updateRecipe called
+          - cancel -> cancelled emitted
+        edge: |
+          - createRecipe called with name string
+          - updateRecipe called with slug and Recipe-shaped body
+      docs: |
+        - First dual-mode form in GDW (create vs edit in one component)
+
+    RecipeDetailView:
+      kind: component
+      defines: "Stateful full recipe view: fetches by slug, shows all sub-entities"
+      composed_of: [vuejs, typescript, recipe_api_client, RecipeIngredientList]
+      tier: 3
+      spec:
+        interface: |
+          Props:
+            slug: string
+          Emits:
+            back()
+            edit(slug: string)
+          State:
+            recipe: Ref<Recipe | null>
+        contract: |
+          On mount (onMounted): recipe.value = await getRecipe(slug).
+          Template shows: name, description, tags, categories, ingredients (via RecipeIngredientList),
+          steps (ordered list of RecipeStep.text), notes (RecipeNote list).
+          "Edit" button -> emit('edit', slug).
+          "Back" button -> emit('back').
+          Loading state: show "Loading..." while recipe.value is null.
+          Import getRecipe, Recipe from '../api'; import RecipeIngredientList.
+      verification:
+        node: |
+          - mock getRecipe
+          - mount with slug
+          - verify getRecipe called on mount
+          - verify recipe name rendered
+          - back button -> 'back' emitted
+          - edit button -> 'edit' emitted with slug
+        edge: |
+          - RecipeIngredientList receives recipe.recipe_ingredient
+          - getRecipe called with prop slug
+      docs: |
+        - Source: mealie/frontend/app/pages/recipe/ (detail view pattern)
+
+    RecipeList:
+      kind: component
+      defines: "Purely presentational recipe grid — receives items, forwards click and delete events"
+      composed_of: [vuejs, typescript, RecipeCard]
+      tier: 3
+      spec:
+        interface: |
+          Props:
+            recipes: RecipeSummary[]
+          Emits:
+            click(slug: string)
+            delete(slug: string)
+          Template:
+            <div v-if="recipes.length === 0">No recipes found.</div>
+            <div v-for="recipe in recipes" :key="recipe.slug">
+              <RecipeCard :recipe="recipe"
+                          @click="$emit('click', $event)"
+                          @delete="$emit('delete', $event)" />
+            </div>
+        contract: |
+          No fetch calls — purely presentational.
+          Forwards click and delete events from RecipeCard unchanged.
+          Shows "No recipes found." when the recipes array is empty.
+          Import RecipeSummary from '../api'; import RecipeCard.
+      verification:
+        node: |
+          - mount with recipes prop
+          - verify cards rendered
+          - forward click/delete
+          - empty array -> empty state
+        edge: |
+          - no api calls
+          - click/delete carry slug unchanged from RecipeCard
+      docs: |
+        - Named-subset list pattern (same as KanbanColumn) applied to recipes
+
+    RecipeDashboard:
+      kind: component
+      defines: "Stateful root: owns all data refs, manages view state, coordinates all children"
+      composed_of: [vuejs, typescript, recipe_api_client, RecipeForm, OrganizerFilter, RecipeList, RecipeDetailView]
+      tier: 4
+      spec:
+        interface: |
+          Props: none
+          State:
+            recipes:          Ref<RecipeSummary[]>
+            tags:             Ref<RecipeTag[]>
+            categories:       Ref<RecipeCategory[]>
+            selectedTag:      Ref<string>        (slug; '' = no filter)
+            selectedCategory: Ref<string>        (slug; '' = no filter)
+            view:             Ref<'list' | 'detail' | 'form'>
+            activeSlug:       Ref<string | null>  (slug for detail/edit view)
+            editRecipe:       Ref<Recipe | null>  (null = create mode; Recipe = edit mode)
+        contract: |
+          On mount (onMounted): call loadData().
+          loadData():
+            recipes.value = (await getRecipes({ tags: selectedTag.value || undefined,
+                                                 categories: selectedCategory.value || undefined })).items
+            tags.value     = await getTags()
+            categories.value = await getCategories()
+
+          watch([selectedTag, selectedCategory], () => loadData())
+
+          handleCardClick(slug: string): activeSlug.value = slug; view.value = 'detail'; editRecipe.value = null
+          handleCardDelete(slug: string): await deleteRecipe(slug); await loadData()
+          handleCreateClick(): editRecipe.value = null; activeSlug.value = null; view.value = 'form'
+          handleEditClick(slug: string): editRecipe.value = await getRecipe(slug); view.value = 'form'
+          handleFormSaved(slug: string): view.value = 'detail'; activeSlug.value = slug; await loadData()
+          handleFormCancelled(): view.value = activeSlug.value ? 'detail' : 'list'
+          handleBack(): view.value = 'list'; activeSlug.value = null
+
+          Template (simplified):
+            <OrganizerFilter v-model="selectedTag"      :options="tags"       label="Filter by Tag" />
+            <OrganizerFilter v-model="selectedCategory" :options="categories" label="Filter by Category" />
+            <button @click="handleCreateClick">New Recipe</button>
+
+            <RecipeList v-if="view === 'list'"
+                        :recipes="recipes"
+                        @click="handleCardClick"
+                        @delete="handleCardDelete" />
+
+            <RecipeDetailView v-if="view === 'detail' && activeSlug"
+                               :slug="activeSlug"
+                               @back="handleBack"
+                               @edit="handleEditClick" />
+
+            <RecipeForm v-if="view === 'form'"
+                        :recipe="editRecipe"
+                        @saved="handleFormSaved"
+                        @cancelled="handleFormCancelled" />
+          Import all api functions and types from '../api'.
+      verification:
+        node: |
+          - mock api
+          - mount
+          - verify getRecipes+getTags+getCategories called on mount
+          - selectedTag change triggers reload
+          - delete card calls deleteRecipe+reload
+          - create click switches view to 'form'
+          - saved switches to 'detail'
+        edge: |
+          - RecipeList receives recipes
+          - OrganizerFilter receives correct options
+          - RecipeForm receives null in create mode
+      docs: |
+        - Stateful root — same pattern as ExpenseDashboard and KanbanBoard
+        - adds view-routing (list/detail/form) as new sub-pattern
+
+    App_vue:
+      kind: component
+      defines: "Root Vue component — mounts RecipeDashboard"
+      composed_of: [vuejs, typescript, RecipeDashboard]
+      tier: 5
+      spec:
+        interface: |
+          - template contains only <RecipeDashboard />
+        contract: |
+          import RecipeDashboard from './components/RecipeDashboard.vue'
+          No local state; no props.
+      verification:
+        node: |
+          - mount App
+          - verify RecipeDashboard rendered
+        edge: |
+          - RecipeDashboard is the only child
+          - App passes no props
+      docs: |
+        - Minimal shell — identical across all GDW apps
+
+    main_ts:
+      kind: module
+      defines: "Vue application entry point"
+      composed_of: [vuejs, typescript, App_vue]
+      tier: 6
+      spec:
+        interface: |
+          - calls createApp(App).mount('#app')
+        contract: |
+          import { createApp } from 'vue'
+          import App from './App.vue'
+          createApp(App).mount('#app')
+      verification:
+        node: |
+          - file imports from 'vue' and './App.vue'
+          - calls createApp
+        edge: |
+          - App exported from App.vue is the component passed to createApp
+      docs: |
+        - Standard Vue 3 entry point
+
+    readme:
+      kind: doc
+      defines: "README.md: setup, run, and test instructions for this frontend"
+      composed_of: [main_ts]
+      tier: 7
+      spec:
+        interface: |
+          Output: README.md at the component root (NOT under src/) — plain Markdown, not code.
+          Do NOT follow the Vue/TypeScript code-style conventions above for this file; those apply
+          to source files only. This file is prose documentation.
+          CRITICAL: output ONLY the Markdown document itself — no preamble narration, no tool-call
+          syntax, no commentary before or after the document.
+        contract: |
+          Must include, as Markdown sections:
+          - Title + one-paragraph description of what this frontend does
+          - Prerequisites: Node.js version, how to install dependencies (npm install)
+          - Running the dev server: exact command (npm run dev) and the default URL/port
+            (http://localhost:5176), and that it expects the backend at http://localhost:8003
+          - Running tests: exact command (npm test)
+          - Component summary: list each component with a one-line description of its role
+        content_outline: |
+          # <Component name>
+          One paragraph description.
+          ## Prerequisites
+          ## Running the dev server
+          ## Running tests
+          ## Components
+      verification:
+        node: |
+          - README.md exists at component root
+          - contains headings for prerequisites, running the dev server, running tests, and components
+      docs: |
+        - Generated last, same convention as every other ported app's readme
+
+function:
+  calls:
+    - id: recipe_api_client_calls_backend_list_recipes
+      from: recipe_api_client.list_recipes
+      to: backend.list_recipes
+      contract:
+        consumer_requires: "GET /recipes -> PaginationBase[RecipeSummary]"
+        provider_guarantees: "GET /recipes -> PaginationBase[RecipeSummary]"
+    - id: recipe_api_client_calls_backend_get_recipe
+      from: recipe_api_client.get_recipe
+      to: backend.get_recipe
+      contract:
+        consumer_requires: "GET /recipes/{slug} -> Recipe"
+        provider_guarantees: "GET /recipes/{slug} -> Recipe"
+    - id: recipe_api_client_calls_backend_create_recipe
+      from: recipe_api_client.create_recipe
+      to: backend.create_recipe
+      contract:
+        consumer_requires: "POST /recipes (name) -> str (slug)"
+        provider_guarantees: "POST /recipes (name) -> str (slug)"
+    - id: recipe_api_client_calls_backend_update_recipe
+      from: recipe_api_client.update_recipe
+      to: backend.update_recipe
+      contract:
+        consumer_requires: "PUT /recipes/{slug} -> Recipe"
+        provider_guarantees: "PUT /recipes/{slug} -> Recipe"
+    - id: recipe_api_client_calls_backend_delete_recipe
+      from: recipe_api_client.delete_recipe
+      to: backend.delete_recipe
+      contract:
+        consumer_requires: "DELETE /recipes/{slug} -> Recipe"
+        provider_guarantees: "DELETE /recipes/{slug} -> Recipe"
+    - id: recipe_api_client_calls_backend_list_tags
+      from: recipe_api_client.list_tags
+      to: backend.list_tags
+      contract:
+        consumer_requires: "GET /tags -> RecipeTag[]"
+        provider_guarantees: "GET /tags -> RecipeTag[]"
+    - id: recipe_api_client_calls_backend_create_tag
+      from: recipe_api_client.create_tag
+      to: backend.create_tag
+      contract:
+        consumer_requires: "POST /tags -> RecipeTag"
+        provider_guarantees: "POST /tags -> RecipeTag"
+    - id: recipe_api_client_calls_backend_list_categories
+      from: recipe_api_client.list_categories
+      to: backend.list_categories
+      contract:
+        consumer_requires: "GET /categories -> RecipeCategory[]"
+        provider_guarantees: "GET /categories -> RecipeCategory[]"
+    - id: recipe_api_client_calls_backend_create_category
+      from: recipe_api_client.create_category
+      to: backend.create_category
+      contract:
+        consumer_requires: "POST /categories -> RecipeCategory"
+        provider_guarantees: "POST /categories -> RecipeCategory"
+    - id: recipe_api_client_calls_backend_list_tools
+      from: recipe_api_client.list_tools
+      to: backend.list_tools
+      contract:
+        consumer_requires: "GET /tools -> RecipeTool[]"
+        provider_guarantees: "GET /tools -> RecipeTool[]"
+    - id: recipe_api_client_calls_backend_create_tool
+      from: recipe_api_client.create_tool
+      to: backend.create_tool
+      contract:
+        consumer_requires: "POST /tools -> RecipeTool"
+        provider_guarantees: "POST /tools -> RecipeTool"
+
+  exports:
+    - name: RecipeDashboard
+      kind: port
+      from: RecipeDashboard.render
+      signature: "() -> void"
+      comment: |
+        The frontend capstone. Composed at the system level (see ./main.graph.yaml)
+        with backend's exports to form the end-to-end recipe-management applications.
+
+verification:
+  - node: RecipeCard
+    backend: vitest
+    tests: tests/RecipeCard.spec.ts
+  - node: OrganizerFilter
+    backend: vitest
+    tests: tests/OrganizerFilter.spec.ts
+  - node: RecipeForm
+    backend: vitest
+    tests: tests/RecipeForm.spec.ts
+  - node: RecipeIngredientList
+    backend: vitest
+    tests: tests/RecipeIngredientList.spec.ts
+  - node: RecipeDetailView
+    backend: vitest
+    tests: tests/RecipeDetailView.spec.ts
+  - node: RecipeList
+    backend: vitest
+    tests: tests/RecipeList.spec.ts
+  - node: RecipeDashboard
+    backend: vitest
+    tests: tests/RecipeDashboard.spec.ts

@@ -1,0 +1,242 @@
+# ── Unified Duality Graph Schema v2.1 — Integrated Profile (Graph of Graphs) ─
+# Migrated from graph-driven-workflow/apps/SPL/todo/system.yaml
+#
+# The original system.yaml hand-merged backend/graph.yaml and frontend/graph.yaml
+# under a bespoke `components:` registry. Here the two component graphs stay
+# fully independent files and are composed declaratively via `imports:` —
+# resolve_imports() pulls each component's `function.exports` in, namespaced
+# as `<alias>.<export_name>`, with no copy/merge of either file's content.
+domain: software/apps/todo
+target_languages: [python, typescript]
+comment: |
+  To-do app: Vue.js frontend + FastAPI backend + SQLite storage. The simplest
+  useful CRUD app — one entity, four operations, no aggregation, no filtering —
+  establishing the baseline pattern that later graph-driven-workflow apps extend.
+capstone: manage_todo_list
+
+# ── Blueprint provenance (schema v2.2 addition, see docs/DEV/BUILD/blueprint-schema-v2.2.md) ──
+# Source of truth for id/version/domain_type — see
+# docs/DEV/BUILD/refactoring-plan-v1.md §1.1 for why the legacy root-level
+# graph:/version:/domain_type: keys are no longer authored here.
+blueprint:
+  id: todo_app
+  schema_version: "2.2"
+  graph_schema_version: "2.1"
+  domain_type: integrated
+  provenance: authored
+  parent_blueprint: null
+  lineage: []
+
+imports:
+  - id: backend
+    graph: ./backend.graph.yaml
+    comment: |
+      FastAPI REST API at :8000, OpenAPI schema at /docs, CORS enabled for :5173.
+      Mandatory — the frontend cannot function without it.
+  - id: frontend
+    graph: ./frontend.graph.yaml
+    comment: |
+      Vue.js SPA served by Vite at :5173. Already imports backend.graph.yaml
+      itself to verify api_client's call contracts; this top-level graph only
+      needs both components present to assemble the system-level applications.
+
+# ── Port configuration (system-level, orchestration metadata) ────────────────
+# Declared once here as the system's single source of truth; each component's
+# own graph.yaml also carries a `port:` field (backend.graph.yaml,
+# frontend.graph.yaml) for standalone use — spl/tools.py's
+# check_port_consistency() (wired into integrate_system.spl) warns if a
+# component's own declared port ever drifts from what's declared here, e.g. if
+# one file gets edited without the other. This exists because of a real,
+# manually-debugged incident (2026-08-12): the generated backend's CORS
+# middleware hardcodes `allow_origins=["http://localhost:5173"]`, and running
+# two frontend dev-server instances at once caused Vite to silently fall back
+# to :5174 for the second one, breaking CORS with no error pointing at the
+# actual cause. This block doesn't prevent that (a live port collision is a
+# runtime condition, not a yaml-authoring drift), but does give a single place
+# to check "what port should each component be on" and a way to catch the
+# yaml itself disagreeing with its own components — same class of problem
+# check_call_contracts() (§9.1) catches for function.calls contracts, applied
+# here to ports instead.
+#
+# Both values are pulled from settings.yaml (docs/DEV/BUILD/refactoring-plan-v1.md
+# §1.2) — changing a port now means editing one key in settings.yaml, not this
+# block and every component's own port: field separately.
+ports:
+  backend: ${{ settings.BACKEND_FASTAPI_PORT }}
+  frontend: ${{ settings.FRONTEND_VITE_PORT }}
+
+form:
+  nodes:
+    todo_app_shell:
+      kind: component
+      defines: "System integration shell: frontend at :5173 consuming backend REST API at :8000 via CORS"
+      tier: 1
+      depends_on: [backend, frontend]
+      comment: |
+        frontend depends on backend's OpenAPI contract; api_client (in frontend)
+        is verified against backend's four exported endpoints before this shell
+        is considered complete — see frontend.graph.yaml's function.calls.
+
+    readme:
+      kind: doc
+      defines: "README.md: product-level overview, setup, and run instructions for the whole todo app"
+      composed_of: [todo_app_shell]
+      tier: 2
+      spec:
+        interface: |
+          Output: README.md at the system root (the same directory as this graph.yaml,
+          or --output_dir when integrate_system.spl was run with one — see
+          docs/DEV/BUILD/README.md §12.1/§12.4) — plain Markdown, not code.
+        contract: |
+          Must include, as Markdown sections:
+          - Title + one-paragraph description of the whole app (Vue frontend + FastAPI
+            backend + SQLite, the applications it supports)
+          - Architecture: frontend (:5173) calls backend (:8000) over REST, CORS enabled —
+            one sentence, link to each component's own README.md for its own setup/run/test
+            instructions rather than repeating them
+          - Running the full system: build it (`spl3 run spl/build_app.spl ...`, see
+            docs/DEV/BUILD/README.md §12.1), then start backend and frontend together
+          - Applications: one line per application from this graph's `applications:` block
+            (create_todo, list_todos, toggle_todo, delete_todo, manage_todo_list) — the
+            user-facing capabilities, not implementation detail
+        content_outline: |
+          # <App name>
+          One paragraph description.
+          ## Architecture
+          ## Running the full system
+          ## Applications
+      verification:
+        node: |
+          - README.md exists at the system root
+          - contains headings for architecture, running the full system, and applications
+      docs: |
+        - Generated last, by integrate_system.spl, after both components are built and
+          acceptance tests have run — so it can report real pass/fail results, not just
+          intent (see integrate_system.spl's write_system_readme)
+        - Not verified against code (kind: doc nodes skip compile/edge-symbol checks — see
+          spl/tools.py verify_node/verify_edges); also not build_component.spl-generated
+          like the per-component readmes, since this system graph.yaml is never passed to
+          build_component.spl directly — see docs/DEV/BUILD/README.md §11 for why
+
+function:
+  exports:
+    - name: manage_todo_list
+      kind: port
+      from: todo_app_shell.main
+      signature: "() -> void"
+      comment: |
+        Single entry point. Serves the frontend, starts the backend, and wires
+        CORS between them. The system capstone — every node in both component
+        graphs exists in service of this workflow.
+
+# ── System-level applications ────────────────────────────────────────────────
+# Applications span components — they are the cross-component use-cases.
+# Each needs at least one node from backend AND one from frontend.
+applications:
+
+  create_todo:
+    defines: |
+      - User types a title and submits
+      - new todo appears in the list immediately
+    needs:
+      backend: [api_routes]
+      frontend: [list_component]
+    tier: 1
+    spec:
+      user_story: |
+        - As a user I can add a new todo by typing a title and pressing Enter
+      contract: |
+        - POST /todos → 201
+        - item appears in list with completed=false
+        - empty title rejected
+    verification: |
+      - e2e: submit form → POST fires → list re-renders with new item
+    docs: |
+      - The entry point for the todo workflow
+
+  list_todos:
+    defines: |
+      - User sees all existing todos on page load, persisted across sessions
+    needs:
+      backend: [api_routes]
+      frontend: [list_component]
+    tier: 1
+    spec:
+      user_story: |
+        - As a user I can see all my todos when I open the app
+      contract: |
+        - GET /todos on mount
+        - renders one item per todo
+        - shows empty state when none
+    verification: |
+      - e2e: seed 3 todos → reload → all 3 render
+      - empty DB → empty state shown
+    docs: |
+      - Validates persistence across page reloads
+
+  toggle_todo:
+    defines: |
+      - User clicks a checkbox to mark a todo complete or incomplete
+    needs:
+      backend: [api_routes]
+      frontend: [item_component]
+    tier: 1
+    spec:
+      user_story: |
+        - As a user I can mark a todo complete or reopen it
+      contract: |
+        - PUT /todos/{id} → completed flips
+        - checkbox reflects new state
+    verification: |
+      - e2e: click checkbox → PUT fires → completed flips → checkbox updates
+    docs: |
+      - Most common user interaction
+
+  delete_todo:
+    defines: |
+      - User clicks delete to permanently remove a todo
+    needs:
+      backend: [api_routes]
+      frontend: [item_component]
+    tier: 1
+    spec:
+      user_story: |
+        - As a user I can delete a todo I no longer need
+      contract: |
+        - DELETE /todos/{id} → 204
+        - item removed
+        - empty state shown if last item
+    verification: |
+      - e2e: click delete → DELETE fires → item removed
+      - last item → empty state
+    docs: |
+      - Edge case: deleting the last item must show empty state
+
+  manage_todo_list:
+    defines: |
+      - User can create, view, complete, and delete todos — full CRUD workflow
+    needs:
+      applications: [create_todo, list_todos, toggle_todo, delete_todo]
+    tier: 2
+    capstone: true
+    spec:
+      user_story: |
+        - As a user I can manage my daily tasks through a simple to-do list
+      contract: |
+        - full lifecycle: empty → create → list → toggle → delete → empty
+        - persists across reloads
+    verification: |
+      - golden path: create 3 → toggle 1 → delete 1 → reload → 2 remain, 1 completed
+    docs: |
+      - The capstone — every other node and component exists in service of this workflow
+
+verification:
+  - node: todo_app_shell
+    tool: integrate_system.spl
+    checks:
+      - CORS headers present on all backend responses
+      - frontend loads without console errors
+      - all four applications pass acceptance tests against live system
+    docs: |
+      - README.md (product-level) — see the `readme` node above
+      - deployment guide

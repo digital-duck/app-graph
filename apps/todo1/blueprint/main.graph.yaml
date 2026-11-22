@@ -1,0 +1,202 @@
+domain: software/apps/todo1
+target_languages: [python, typescript]
+comment: |
+  todo1 is a full-stack task management application that lets users create,
+  view, complete, and delete to-do items through a Vue.js single-page
+  application backed by a FastAPI REST API. Tasks carry a description,
+  timestamp, and completion flag persisted in a SQLite/SQLAlchemy database;
+  the frontend organises them into Today / Yesterday / Earlier / Completed
+  buckets with tag-based filtering and an optional Chart.js statistics modal.
+capstone: manage_todo1
+
+blueprint:
+  id: todo1_app
+  schema_version: "2.2"
+  graph_schema_version: "2.1"
+  domain_type: integrated
+  provenance: reverse
+  parent_blueprint: null
+  lineage: []
+
+imports:
+  - id: backend
+    graph: ./backend.graph.yaml
+    comment: |
+      FastAPI service exposing CRUD REST endpoints for Task resources on
+      port ${{ settings.BACKEND_FASTAPI_PORT }} with CORS open to the
+      frontend origin.
+  - id: frontend
+    graph: ./frontend.graph.yaml
+    comment: |
+      Vue 3 SPA served by Vite on port ${{ settings.FRONTEND_VITE_PORT }}
+      that calls the backend REST API to load, create, complete, and delete
+      tasks and renders them with Bulma CSS.
+
+ports:
+  backend: ${{ settings.BACKEND_FASTAPI_PORT }}
+  frontend: ${{ settings.FRONTEND_VITE_PORT }}
+
+form:
+  nodes:
+    app_shell:
+      kind: component
+      defines: "System integration shell: Vue SPA consuming FastAPI REST API via CORS"
+      tier: 1
+      depends_on: [backend, frontend]
+
+    readme:
+      kind: doc
+      defines: "README.md: product-level overview, setup, and run instructions"
+      composed_of: [app_shell]
+      tier: 2
+      spec:
+        interface: |
+          Output: README.md at the system root — plain Markdown, not code.
+        contract: |
+          Title, one-paragraph description, Architecture section (backend port,
+          frontend port, CORS policy), Running the full system (backend then
+          frontend start commands), Applications (one line per applications
+          entry below listing the use-case and the endpoints it exercises).
+
+function:
+  exports:
+    - name: manage_todo1
+      kind: port
+      from: app_shell.main
+      signature: "() -> void"
+
+applications:
+  load_tasks:
+    tier: 1
+    needs:
+      backend: [backend.task_routes, backend.crud, backend.schemas]
+      frontend: [frontend.todo_form, frontend.todo_list]
+    spec:
+      user_story: |
+        When the app mounts, the user immediately sees all previously saved
+        tasks rendered in the list without taking any action.
+      contract: |
+        On mount ToDoForm calls GET /tasks/ (limit=100); each task in the
+        JSON array is normalised (date parsed, isCompleted aliased,
+        isVisible set true) and inserted into the reactive tasks Map; ToDoList
+        renders activeTasks and completedTasks split from that Map; the list
+        is visible only when at least one bucket is non-empty.
+
+  create_task:
+    tier: 1
+    needs:
+      backend: [backend.task_routes, backend.crud, backend.schemas, backend.orm_models]
+      frontend: [frontend.todo_form, frontend.todo_list]
+    spec:
+      user_story: |
+        The user types a description into the input field, clicks ADD, and the
+        new task appears instantly at the top of the active list tagged Today.
+      contract: |
+        ToDoForm.onSubmit posts { description, date: new Date(),
+        is_completed: false } to POST /tasks/; backend validates via
+        TaskCreate schema, persists via crud.create_task, and returns the
+        saved Task; frontend normalises the response and inserts it into the
+        tasks Map then calls todoList.taskUpdate(); the input field is cleared
+        afterwards; empty submissions are rejected client-side without a
+        network call.
+
+  complete_task:
+    tier: 1
+    needs:
+      backend: [backend.task_routes, backend.crud, backend.schemas]
+      frontend: [frontend.todo_list]
+    spec:
+      user_story: |
+        The user clicks the check icon on an active task; the task moves to the
+        Completed section with a strikethrough style and the check button
+        disappears.
+      contract: |
+        ToDoList.completeTask sends PUT /task/{task_id} with the full
+        TaskUpdate payload where is_completed is flipped to true; backend
+        validates via TaskUpdate schema and calls crud.update_task; frontend
+        re-runs taskUpdate() so the task migrates from activeTasks to
+        completedTasks; the Completed tag is rendered in its place; 404
+        responses from the backend are surfaced as console errors.
+
+  delete_task:
+    tier: 1
+    needs:
+      backend: [backend.task_routes, backend.crud]
+      frontend: [frontend.todo_list]
+    spec:
+      user_story: |
+        The user clicks the × button next to any task (active or completed);
+        the task is permanently removed from the list.
+      contract: |
+        ToDoList.deleteTask sends DELETE /task/{task_id}; backend calls
+        crud.get_task and raises 404 if missing, otherwise crud.delete_task;
+        on success the frontend removes the id from the tasks Map and calls
+        taskUpdate() to refresh both activeTasks and completedTasks; no
+        undo mechanism exists.
+
+  filter_tasks:
+    tier: 1
+    needs:
+      backend: [backend.task_routes, backend.crud]
+      frontend: [frontend.todo_list, frontend.todo_filter]
+    spec:
+      user_story: |
+        The user toggles the Today / Yesterday / Earlier / Completed tag chips
+        to hide or show tasks belonging to each bucket without reloading data
+        from the server.
+      contract: |
+        ToDoFilter emits tag-toggled with the list of disabled tag names;
+        ToDoList.onTagToggled iterates the tasks Map and sets task.isVisible
+        false for tasks whose date bucket or completion state matches a
+        disabled name; toggling a chip a second time re-enables that bucket;
+        all four tags are enabled by default on load; no additional network
+        requests are made during filtering.
+
+  view_statistics:
+    tier: 1
+    needs:
+      backend: [backend.task_routes, backend.crud]
+      frontend: [frontend.todo_filter, frontend.todo_charts]
+    spec:
+      user_story: |
+        The user clicks the bar-chart icon in the filter bar; a modal opens
+        displaying a Chart.js chart summarising task statistics, which closes
+        when the user clicks the background or the × button.
+      contract: |
+        ToDoFilter.toggleModal flips modalState; ToDoCharts receives it as
+        the modalState prop and applies the Bulma is-active class to the
+        modal overlay; on mount Chart.js is instantiated on the canvas element
+        using the chartData configuration imported from chartData.js;
+        closeModal emits close-modal back to ToDoFilter which calls
+        toggleModal again; the chart instance is created once on component
+        mount and the modal open/close is CSS-only thereafter.
+
+  manage_todo1:
+    tier: 2
+    capstone: true
+    needs:
+      backend: [backend.task_routes, backend.crud, backend.schemas, backend.orm_models]
+      frontend: [frontend.todo_form, frontend.todo_list, frontend.todo_filter, frontend.todo_charts]
+      applications: [load_tasks, create_task, complete_task, delete_task, filter_tasks, view_statistics]
+    spec:
+      user_story: |
+        The user opens the app in a browser and has full control over their
+        personal task list: tasks persist across sessions, can be created,
+        completed, deleted, filtered by recency or status, and summarised in
+        a statistics chart — all through a single cohesive interface.
+      contract: |
+        All six subordinate applications pass their individual acceptance
+        tests against the live integrated system; CORS headers are present on
+        every backend response; the frontend SPA loads without console errors;
+        the tasks table is pre-created on backend startup via
+        Base.metadata.create_all; backend runs on BACKEND_FASTAPI_PORT and
+        frontend on FRONTEND_VITE_PORT with the frontend origin whitelisted
+        in the CORS middleware.
+
+verification:
+  - node: app_shell
+    tool: integrate_system.spl
+    checks:
+      - CORS headers present on all backend responses
+      - frontend loads without console errors
+      - every application passes acceptance tests against the live system

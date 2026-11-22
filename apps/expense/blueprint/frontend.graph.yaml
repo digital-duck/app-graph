@@ -1,0 +1,434 @@
+# ── Unified Duality Graph Schema v2.1 — Software Profile ────────────────────
+# Migrated from graph-driven-workflow/apps/SPL/expense/components/frontend/graph.yaml
+domain: software/frontend/vue
+target_languages: [typescript]
+comment: |
+  Vue 3 / TypeScript frontend: API client, form, list, filter, summary, dashboard.
+capstone: ExpenseDashboard
+
+tech_profile: vue_typescript
+port: ${{ settings.FRONTEND_VITE_PORT }}
+
+# Source of truth for id/version/domain_type — see
+# docs/DEV/BUILD/refactoring-plan-v1.md §1.1.
+blueprint:
+  id: expense_app_frontend
+  schema_version: "2.2"
+  graph_schema_version: "2.1"
+  domain_type: software
+  provenance: authored
+  parent_blueprint: null
+  lineage: []
+
+imports:
+  - id: backend
+    graph: ./backend.graph.yaml
+    comment: |
+      The backend REST API is a mandatory dependency. api_client's four calls
+      are verified against backend's four exported endpoint contracts below.
+
+form:
+  primitives:
+    vuejs:
+      defines: "Vue 3: reactive component system, Composition API, directives"
+      tier: 0
+      kind: config
+    typescript:
+      defines: "TypeScript: static types, interfaces, generics"
+      tier: 0
+      kind: config
+    vite:
+      defines: "Vite: dev server, HMR, module bundler"
+      tier: 0
+      kind: config
+    fetch_api:
+      defines: "Browser fetch API: promise-based HTTP client"
+      tier: 0
+      kind: config
+
+  nodes:
+    api_client:
+      kind: module
+      defines: "TypeScript fetch wrappers for all expense API endpoints"
+      composed_of: [fetch_api, typescript]
+      tier: 1
+      ports:
+        list_expenses:
+          signature: "GET /expenses -> Expense[]"
+          kind: call
+          direction: out
+        create_expense:
+          signature: "POST /expenses (amount, category, date, description) -> Expense"
+          kind: call
+          direction: out
+        delete_expense:
+          signature: "DELETE /expenses/{id} -> void"
+          kind: call
+          direction: out
+        get_summary:
+          signature: "GET /expenses/summary -> ExpenseSummary"
+          kind: call
+          direction: out
+      spec:
+        interface: |
+          export interface Expense {
+            id: number; amount: number; category: string; date: string;
+            description: string; created_at: string
+          }
+          export interface CategorySummary { category: string; total: number; count: number }
+          export interface ExpenseSummary { total: number; by_category: CategorySummary[] }
+          export interface ExpenseCreate { amount: number; category: string; date: string; description?: string }
+
+          export async function getExpenses(params?: {
+            category?: string; start_date?: string; end_date?: string
+          }): Promise<Expense[]>
+          export async function createExpense(data: ExpenseCreate): Promise<Expense>
+          export async function deleteExpense(id: number): Promise<void>
+          export async function getSummary(params?: {
+            category?: string; start_date?: string; end_date?: string
+          }): Promise<ExpenseSummary>
+        contract: |
+          const BASE_URL = `${import.meta.env.VITE_API_BASE_URL}/expenses`
+          getExpenses: GET ${BASE_URL} with query params serialized from params object;
+            omit undefined/null values from the URL.
+          createExpense: POST ${BASE_URL} with Content-Type: application/json body; returns Expense.
+          deleteExpense: DELETE ${BASE_URL}/${id}; throws Error if response not ok.
+          getSummary: GET ${BASE_URL}/summary with query params from params object.
+          All functions: if (!response.ok) throw new Error(`HTTP ${response.status}`).
+          Build query string: filter out undefined values, use URLSearchParams or manual join.
+          Interface names are EXACTLY Expense, CategorySummary, ExpenseSummary, ExpenseCreate —
+          no ExpenseDTO/ExpenseResponse/ExpenseModel or similar variant anywhere in this app; every
+          other node imports these four names as-is from '../api'.
+      verification:
+        node: |
+          - all four functions exported and callable
+          - base URL points at /expenses
+        edge: |
+          - HTTP method and path match backend api_routes contract exactly
+      docs: |
+        - Single HTTP coupling point — all other modules import from here
+
+    ExpenseForm:
+      kind: component
+      defines: "Form component for creating a new expense"
+      composed_of: [vuejs, typescript]
+      tier: 1
+      spec:
+        interface: |
+          Props: none
+          Emits: created(expense: Expense)
+          Fields: amount (number input, step=0.01, min=0.01), category (text),
+                  date (date input, defaults to today), description (text, optional)
+          Submit button text: "Add Expense"
+        contract: |
+          Uses ref() for form fields: amount = ref(0), category = ref(''), date = ref(today),
+          description = ref('').
+          today = new Date().toISOString().split('T')[0]  (ISO date string)
+          On submit: calls createExpense({ amount: amount.value, category: category.value,
+            date: date.value, description: description.value }) from api_client.
+          On success: emit('created', result); reset amount to 0, category to '', description to ''.
+          On error: show alert with error message.
+          Import createExpense and Expense from '../api'.
+      verification:
+        node: |
+          - mount, fill fields, submit
+          - verify createExpense called with correct args
+          - verify 'created' emitted
+        edge: |
+          - after submit, amount and category reset to defaults
+          - 'created' emitted with Expense from api
+      docs: |
+        - Presentational except for the createExpense call — parent owns list state
+
+    ExpenseItem:
+      kind: component
+      defines: "Purely presentational row for a single expense"
+      composed_of: [vuejs, typescript]
+      tier: 1
+      spec:
+        interface: |
+          Props: expense: Expense  (import Expense from '../api')
+          Emits: delete(id: number)
+          Template: shows ${{ expense.amount.toFixed(2) }}, category, date, description; Delete button
+        contract: |
+          No fetch calls — purely presentational.
+          Delete button: @click="$emit('delete', expense.id)"
+          Amount formatted as: `$${expense.amount.toFixed(2)}`
+          Display date as-is (ISO string from API).
+      verification:
+        node: |
+          - mount with expense prop, verify text content
+          - click Delete, verify 'delete' emitted with correct id
+        edge: |
+          - no api import
+          - 'delete' emitted with expense.id
+      docs: |
+        - Single row — parent handles the actual deletion
+
+    CategoryFilter:
+      kind: component
+      defines: "v-model-compatible dropdown for selecting a category filter"
+      composed_of: [vuejs, typescript]
+      tier: 2
+      spec:
+        interface: |
+          Props: modelValue: string  ('' = All), categories: string[]
+          Emits: update:modelValue(value: string)
+          Template: <select :value="modelValue" @change="...">
+            <option value="">All Categories</option>
+            <option v-for="cat in categories" :key="cat" :value="cat">{{ cat }}</option>
+          </select>
+        contract: |
+          v-model compatible: @change handler emits 'update:modelValue' with the new value:
+            @change="$emit('update:modelValue', ($event.target as HTMLSelectElement).value)"
+          No internal state — fully controlled by parent via modelValue prop.
+          First option: value="" with text "All Categories".
+          Remaining options: one per category string from the categories prop.
+      verification:
+        node: |
+          - mount with modelValue='' and categories=['Food','Transport']
+          - verify 3 options
+          - change to 'Food', verify update:modelValue=['Food']
+        edge: |
+          - parent can v-model bind
+          - no internal state mutation
+      docs: |
+        - Stateless filter control — reusable pattern beyond this app
+
+    ExpenseList:
+      kind: component
+      defines: "List component rendering expense rows received as props"
+      composed_of: [vuejs, typescript, ExpenseItem]
+      tier: 2
+      spec:
+        interface: |
+          Props: expenses: Expense[]
+          Emits: delete(id: number)
+          Template:
+            <div v-if="expenses.length === 0">No expenses found.</div>
+            <ExpenseItem v-for="e in expenses" :key="e.id" :expense="e" @delete="$emit('delete', $event)" />
+        contract: |
+          No fetch calls — purely presentational.
+          Forwards 'delete' events from ExpenseItem up to parent unchanged.
+          Shows "No expenses found." when the expenses array is empty.
+          Import Expense from '../api'; import ExpenseItem from './ExpenseItem.vue'.
+      verification:
+        node: |
+          - mount with expenses prop, verify rows rendered
+          - verify delete forwarded, verify empty state
+        edge: |
+          - no api calls
+          - 'delete' emitted with id from child ExpenseItem
+      docs: |
+        - Presentational list — parent (ExpenseDashboard) owns state and handles deletion
+
+    SummaryView:
+      kind: component
+      defines: "Read-only summary panel showing total and per-category breakdown"
+      composed_of: [vuejs, typescript]
+      tier: 2
+      spec:
+        interface: |
+          Props: summary: ExpenseSummary | null
+          Template:
+            When null: <div>Loading summary...</div>
+            When provided:
+              <div>Total: ${{ summary.total.toFixed(2) }}</div>
+              <table> with columns Category | Total | Count
+                one <tr> per summary.by_category item
+              </table>
+        contract: |
+          No fetch calls — purely presentational.
+          Format amounts with .toFixed(2).
+          Import ExpenseSummary and CategorySummary from '../api'.
+          When summary.by_category is empty, show the table with zero rows (not hidden).
+      verification:
+        node: |
+          - mount with null -> shows 'Loading summary...'
+          - mount with data -> shows total and table rows
+        edge: |
+          - does not call any api function
+          - renders all by_category rows
+      docs: |
+        - Read-only view — ExpenseDashboard owns the summary and passes it here
+
+    ExpenseDashboard:
+      kind: component
+      defines: "Stateful root component — owns all data refs and orchestrates all children"
+      composed_of: [vuejs, typescript, api_client, ExpenseForm, ExpenseList, CategoryFilter, SummaryView]
+      tier: 3
+      spec:
+        interface: |
+          Props: none
+          State:
+            expenses: Ref<Expense[]>               (all expenses for current filter)
+            summary: Ref<ExpenseSummary | null>    (summary for current filter)
+            selectedCategory: Ref<string>          ('' = All categories)
+          Computed:
+            categories: ComputedRef<string[]>      (unique, sorted categories from expenses)
+          Methods:
+            loadData(): Promise<void>
+            handleCreate(expense: Expense): void
+            handleDelete(id: number): Promise<void>
+        contract: |
+          On mount (onMounted): call loadData().
+          loadData():
+            const params = selectedCategory.value ? { category: selectedCategory.value } : undefined
+            [expenses.value, summary.value] = await Promise.all([
+              getExpenses(params), getSummary(params)
+            ])
+          watch(selectedCategory, () => loadData())  — reload when the filter changes.
+          handleCreate(): call loadData() to refresh both list and summary.
+          handleDelete(id): await deleteExpense(id); await loadData().
+          categories computed: [...new Set(expenses.value.map(e => e.category))].sort()
+          Template:
+            <CategoryFilter v-model="selectedCategory" :categories="categories" />
+            <ExpenseForm @created="handleCreate" />
+            <ExpenseList :expenses="expenses" @delete="handleDelete" />
+            <SummaryView :summary="summary" />
+      verification:
+        node: |
+          - mock api, mount
+          - verify getExpenses+getSummary called on mount
+          - verify category change triggers reload
+        edge: |
+          - passes selectedCategory as filter to api
+          - ExpenseList receives expenses
+          - SummaryView receives summary
+      docs: |
+        - Single stateful component — all four children are presentational
+
+    App_vue:
+      kind: component
+      defines: "Root Vue component — mounts ExpenseDashboard"
+      composed_of: [vuejs, typescript, ExpenseDashboard]
+      tier: 4
+      spec:
+        interface: |
+          - template contains only <ExpenseDashboard />
+        contract: |
+          import ExpenseDashboard from './components/ExpenseDashboard.vue'
+          No local state; no props.
+      verification:
+        node: |
+          - mount App, verify ExpenseDashboard rendered
+        edge: |
+          - ExpenseDashboard is the only child
+          - App passes no props to it
+      docs: |
+        - Minimal shell — all logic lives in ExpenseDashboard
+
+    main_ts:
+      kind: module
+      defines: "Vue application entry point"
+      composed_of: [vuejs, typescript, App_vue]
+      tier: 5
+      spec:
+        interface: |
+          - calls createApp(App).mount('#app')
+        contract: |
+          import { createApp } from 'vue'
+          import App from './App.vue'
+          createApp(App).mount('#app')
+      verification:
+        node: |
+          - file imports from 'vue' and './App.vue'
+          - calls createApp
+        edge: |
+          - App exported from App.vue is the component passed to createApp
+      docs: |
+        - Standard Vue 3 entry point
+
+    readme:
+      kind: doc
+      defines: "README.md: setup, run, and test instructions for this frontend"
+      composed_of: [main_ts]
+      tier: 6
+      spec:
+        interface: |
+          Output: README.md at the component root (NOT under src/) — plain Markdown, not code.
+          Do NOT follow the Vue/TypeScript code-style conventions above for this file; those apply
+          to source files only. This file is prose documentation.
+          CRITICAL: output ONLY the Markdown document itself — no preamble narration, no tool-call
+          syntax, no commentary before or after the document (see apps/dispatch/backend.graph.yaml's
+          readme node for the real incident this instruction guards against).
+        contract: |
+          Must include, as Markdown sections:
+          - Title + one-paragraph description of what this frontend does
+          - Prerequisites: Node.js version, how to install dependencies (npm install)
+          - Running the dev server: exact command (npm run dev) and the default URL/port
+            (http://localhost:5174), and that it expects the backend at http://localhost:8001
+          - Running tests: exact command (npm test)
+          - Component summary: list each component with a one-line description of its role
+        content_outline: |
+          # <Component name>
+          One paragraph description.
+          ## Prerequisites
+          ## Running the dev server
+          ## Running tests
+          ## Components
+      verification:
+        node: |
+          - README.md exists at component root
+          - contains headings for prerequisites, running the dev server, running tests, and components
+      docs: |
+        - Generated last, same convention as apps/todo/ and apps/dispatch/'s readme
+
+function:
+  calls:
+    - id: api_client_calls_backend_list
+      from: api_client.list_expenses
+      to: backend.list_expenses
+      contract:
+        consumer_requires: "GET /expenses -> Expense[]"
+        provider_guarantees: "GET /expenses -> Expense[]"
+    - id: api_client_calls_backend_create
+      from: api_client.create_expense
+      to: backend.create_expense
+      contract:
+        consumer_requires: "POST /expenses (amount, category, date, description) -> Expense"
+        provider_guarantees: "POST /expenses (amount, category, date, description) -> Expense"
+    - id: api_client_calls_backend_delete
+      from: api_client.delete_expense
+      to: backend.delete_expense
+      contract:
+        consumer_requires: "DELETE /expenses/{id} -> void"
+        provider_guarantees: "DELETE /expenses/{id} -> void"
+    - id: api_client_calls_backend_summary
+      from: api_client.get_summary
+      to: backend.get_summary
+      contract:
+        consumer_requires: "GET /expenses/summary -> ExpenseSummary"
+        provider_guarantees: "GET /expenses/summary -> ExpenseSummary"
+
+  exports:
+    - name: ExpenseDashboard
+      kind: port
+      from: ExpenseDashboard.render
+      signature: "() -> void"
+      comment: |
+        The frontend capstone. Composed at the system level (see ./main.graph.yaml)
+        with backend's exports to form the end-to-end expense-tracking applications.
+
+verification:
+  - node: api_client
+    backend: vitest
+    tests: tests/api.spec.ts
+  - node: ExpenseForm
+    backend: vitest
+    tests: tests/ExpenseForm.spec.ts
+  - node: ExpenseItem
+    backend: vitest
+    tests: tests/ExpenseItem.spec.ts
+  - node: CategoryFilter
+    backend: vitest
+    tests: tests/CategoryFilter.spec.ts
+  - node: ExpenseList
+    backend: vitest
+    tests: tests/ExpenseList.spec.ts
+  - node: SummaryView
+    backend: vitest
+    tests: tests/SummaryView.spec.ts
+  - node: ExpenseDashboard
+    backend: vitest
+    tests: tests/ExpenseDashboard.spec.ts

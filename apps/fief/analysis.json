@@ -1,0 +1,1249 @@
+{
+  "stack": {
+    "backend": {
+      "file": "pyproject.toml",
+      "fastapi": true,
+      "sqlalchemy": true,
+      "alembic": true,
+      "pydantic": true
+    },
+    "frontend": {
+      "packages": [
+        "@babel/core",
+        "@babel/plugin-transform-runtime",
+        "@babel/runtime",
+        "@codemirror/lang-html",
+        "@rollup/plugin-babel",
+        "@rollup/plugin-commonjs",
+        "@rollup/plugin-node-resolve",
+        "@rollup/plugin-terser",
+        "@tailwindcss/forms",
+        "@uiw/codemirror-theme-github",
+        "autoprefixer",
+        "codemirror",
+        "htmx.org",
+        "hyperscript.org",
+        "postcss",
+        "rollup",
+        "rollup-plugin-postcss",
+        "sass",
+        "slugify",
+        "tailwindcss"
+      ],
+      "nuxt": false,
+      "vue": false,
+      "react": false,
+      "svelte": false,
+      "angular": false,
+      "vite": false,
+      "vitest": false,
+      "vuetify": false
+    }
+  },
+  "routes": [
+    {
+      "method": "GET",
+      "path": "/",
+      "status_code": 200,
+      "response_model": "PaginatedResults[schemas.client.Client]",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/apps/api/routers/clients.py"
+    },
+    {
+      "method": "GET",
+      "path": "/{id:uuid}",
+      "status_code": 200,
+      "response_model": "schemas.client.Client",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/apps/api/routers/clients.py"
+    },
+    {
+      "method": "POST",
+      "path": "/",
+      "status_code": 200,
+      "response_model": "schemas.client.Client",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/apps/api/routers/clients.py"
+    },
+    {
+      "method": "PATCH",
+      "path": "/{id:uuid}",
+      "status_code": 200,
+      "response_model": "schemas.client.Client",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/apps/api/routers/clients.py"
+    },
+    {
+      "method": "POST",
+      "path": "/{id:uuid}/encryption-key",
+      "status_code": 200,
+      "response_model": "unknown",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/apps/api/routers/clients.py"
+    },
+    {
+      "method": "DELETE",
+      "path": "/{id:uuid}",
+      "status_code": 200,
+      "response_model": "unknown",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/apps/api/routers/clients.py"
+    },
+    {
+      "method": "GET",
+      "path": "/",
+      "status_code": 200,
+      "response_model": "PaginatedResults[schemas.email_template.EmailTemplate]",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/apps/api/routers/email_templates.py"
+    },
+    {
+      "method": "GET",
+      "path": "/{id:uuid}",
+      "status_code": 200,
+      "response_model": "schemas.email_template.EmailTemplate",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/apps/api/routers/email_templates.py"
+    },
+    {
+      "method": "PATCH",
+      "path": "/{id:uuid}",
+      "status_code": 200,
+      "response_model": "schemas.email_template.EmailTemplate",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/apps/api/routers/email_templates.py"
+    },
+    {
+      "method": "GET",
+      "path": "/",
+      "status_code": 200,
+      "response_model": "PaginatedResults[schemas.oauth_provider.OAuthProvider]",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/apps/api/routers/oauth_providers.py"
+    },
+    {
+      "method": "GET",
+      "path": "/{id:uuid}",
+      "status_code": 200,
+      "response_model": "schemas.oauth_provider.OAuthProvider",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/apps/api/routers/oauth_providers.py"
+    },
+    {
+      "method": "POST",
+      "path": "/",
+      "status_code": 200,
+      "response_model": "schemas.oauth_provider.OAuthProvider",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/apps/api/routers/oauth_providers.py"
+    },
+    {
+      "method": "PATCH",
+      "path": "/{id:uuid}",
+      "status_code": 200,
+      "response_model": "schemas.oauth_provider.OAuthProvider",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/apps/api/routers/oauth_providers.py"
+    },
+    {
+      "method": "DELETE",
+      "path": "/{id:uuid}",
+      "status_code": 200,
+      "response_model": "unknown",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/apps/api/routers/oauth_providers.py"
+    },
+    {
+      "method": "GET",
+      "path": "/{id:uuid}/access-token/{user_id:uuid}",
+      "status_code": 200,
+      "response_model": "schemas.oauth_account.OAuthAccountAccessToken",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/apps/api/routers/oauth_providers.py"
+    },
+    {
+      "method": "GET",
+      "path": "/",
+      "status_code": 200,
+      "response_model": "PaginatedResults[schemas.permission.Permission]",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/apps/api/routers/permissions.py"
+    },
+    {
+      "method": "GET",
+      "path": "/{id:uuid}",
+      "status_code": 200,
+      "response_model": "schemas.permission.Permission",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/apps/api/routers/permissions.py"
+    },
+    {
+      "method": "POST",
+      "path": "/",
+      "status_code": 200,
+      "response_model": "schemas.permission.Permission",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/apps/api/routers/permissions.py"
+    },
+    {
+      "method": "PATCH",
+      "path": "/{id:uuid}",
+      "status_code": 200,
+      "response_model": "schemas.permission.Permission",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/apps/api/routers/permissions.py"
+    },
+    {
+      "method": "DELETE",
+      "path": "/{id:uuid}",
+      "status_code": 200,
+      "response_model": "unknown",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/apps/api/routers/permissions.py"
+    },
+    {
+      "method": "GET",
+      "path": "/",
+      "status_code": 200,
+      "response_model": "PaginatedResults[schemas.role.Role]",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/apps/api/routers/roles.py"
+    },
+    {
+      "method": "GET",
+      "path": "/{id:uuid}",
+      "status_code": 200,
+      "response_model": "schemas.role.Role",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/apps/api/routers/roles.py"
+    },
+    {
+      "method": "POST",
+      "path": "/",
+      "status_code": 200,
+      "response_model": "schemas.role.Role",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/apps/api/routers/roles.py"
+    },
+    {
+      "method": "PATCH",
+      "path": "/{id:uuid}",
+      "status_code": 200,
+      "response_model": "schemas.role.Role",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/apps/api/routers/roles.py"
+    },
+    {
+      "method": "DELETE",
+      "path": "/{id:uuid}",
+      "status_code": 200,
+      "response_model": "unknown",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/apps/api/routers/roles.py"
+    },
+    {
+      "method": "GET",
+      "path": "/",
+      "status_code": 200,
+      "response_model": "PaginatedResults[schemas.tenant.Tenant]",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/apps/api/routers/tenants.py"
+    },
+    {
+      "method": "GET",
+      "path": "/{id:uuid}",
+      "status_code": 200,
+      "response_model": "schemas.tenant.Tenant",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/apps/api/routers/tenants.py"
+    },
+    {
+      "method": "POST",
+      "path": "/",
+      "status_code": 200,
+      "response_model": "schemas.tenant.Tenant",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/apps/api/routers/tenants.py"
+    },
+    {
+      "method": "PATCH",
+      "path": "/{id:uuid}",
+      "status_code": 200,
+      "response_model": "schemas.tenant.Tenant",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/apps/api/routers/tenants.py"
+    },
+    {
+      "method": "DELETE",
+      "path": "/{id:uuid}",
+      "status_code": 200,
+      "response_model": "unknown",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/apps/api/routers/tenants.py"
+    },
+    {
+      "method": "GET",
+      "path": "/",
+      "status_code": 200,
+      "response_model": "PaginatedResults[schemas.user_field.UserField]",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/apps/api/routers/user_fields.py"
+    },
+    {
+      "method": "GET",
+      "path": "/{id:uuid}",
+      "status_code": 200,
+      "response_model": "schemas.user_field.UserField",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/apps/api/routers/user_fields.py"
+    },
+    {
+      "method": "POST",
+      "path": "/",
+      "status_code": 200,
+      "response_model": "schemas.user_field.UserField",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/apps/api/routers/user_fields.py"
+    },
+    {
+      "method": "PATCH",
+      "path": "/{id:uuid}",
+      "status_code": 200,
+      "response_model": "schemas.user_field.UserField",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/apps/api/routers/user_fields.py"
+    },
+    {
+      "method": "DELETE",
+      "path": "/{id:uuid}",
+      "status_code": 200,
+      "response_model": "unknown",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/apps/api/routers/user_fields.py"
+    },
+    {
+      "method": "GET",
+      "path": "/",
+      "status_code": 200,
+      "response_model": "PaginatedResults[schemas.user.UserRead]",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/apps/api/routers/users.py"
+    },
+    {
+      "method": "GET",
+      "path": "/{id:uuid}",
+      "status_code": 200,
+      "response_model": "schemas.user.UserRead",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/apps/api/routers/users.py"
+    },
+    {
+      "method": "POST",
+      "path": "/",
+      "status_code": 200,
+      "response_model": "schemas.user.UserRead",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/apps/api/routers/users.py"
+    },
+    {
+      "method": "PATCH",
+      "path": "/{id:uuid}",
+      "status_code": 200,
+      "response_model": "schemas.user.UserRead",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/apps/api/routers/users.py"
+    },
+    {
+      "method": "DELETE",
+      "path": "/{id:uuid}",
+      "status_code": 200,
+      "response_model": "unknown",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/apps/api/routers/users.py"
+    },
+    {
+      "method": "GET",
+      "path": "/{id:uuid}/permissions",
+      "status_code": 200,
+      "response_model": "PaginatedResults[schemas.user_permission.UserPermission]",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/apps/api/routers/users.py"
+    },
+    {
+      "method": "POST",
+      "path": "/{id:uuid}/access-token",
+      "status_code": 200,
+      "response_model": "schemas.user.AccessTokenResponse",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/apps/api/routers/users.py"
+    },
+    {
+      "method": "POST",
+      "path": "/{id:uuid}/permissions",
+      "status_code": 200,
+      "response_model": "unknown",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/apps/api/routers/users.py"
+    },
+    {
+      "method": "DELETE",
+      "path": "/{id:uuid}/permissions/{permission_id:uuid}",
+      "status_code": 200,
+      "response_model": "unknown",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/apps/api/routers/users.py"
+    },
+    {
+      "method": "GET",
+      "path": "/{id:uuid}/roles",
+      "status_code": 200,
+      "response_model": "PaginatedResults[schemas.user_role.UserRole]",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/apps/api/routers/users.py"
+    },
+    {
+      "method": "POST",
+      "path": "/{id:uuid}/roles",
+      "status_code": 200,
+      "response_model": "unknown",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/apps/api/routers/users.py"
+    },
+    {
+      "method": "DELETE",
+      "path": "/{id:uuid}/roles/{role_id:uuid}",
+      "status_code": 200,
+      "response_model": "unknown",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/apps/api/routers/users.py"
+    },
+    {
+      "method": "GET",
+      "path": "/{id:uuid}/oauth-accounts",
+      "status_code": 200,
+      "response_model": "PaginatedResults[schemas.oauth_account.OAuthAccount]",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/apps/api/routers/users.py"
+    },
+    {
+      "method": "GET",
+      "path": "/",
+      "status_code": 200,
+      "response_model": "PaginatedResults[schemas.webhook.Webhook]",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/apps/api/routers/webhooks.py"
+    },
+    {
+      "method": "POST",
+      "path": "/",
+      "status_code": 200,
+      "response_model": "schemas.webhook.WebhookSecret",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/apps/api/routers/webhooks.py"
+    },
+    {
+      "method": "GET",
+      "path": "/{id:uuid}",
+      "status_code": 200,
+      "response_model": "schemas.webhook.Webhook",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/apps/api/routers/webhooks.py"
+    },
+    {
+      "method": "PATCH",
+      "path": "/{id:uuid}",
+      "status_code": 200,
+      "response_model": "schemas.webhook.Webhook",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/apps/api/routers/webhooks.py"
+    },
+    {
+      "method": "POST",
+      "path": "/{id:uuid}/secret",
+      "status_code": 200,
+      "response_model": "schemas.webhook.WebhookSecret",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/apps/api/routers/webhooks.py"
+    },
+    {
+      "method": "DELETE",
+      "path": "/{id:uuid}",
+      "status_code": 200,
+      "response_model": "unknown",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/apps/api/routers/webhooks.py"
+    },
+    {
+      "method": "GET",
+      "path": "/{id:uuid}/logs",
+      "status_code": 200,
+      "response_model": "PaginatedResults[schemas.webhook_log.WebhookLog]",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/apps/api/routers/webhooks.py"
+    }
+  ],
+  "schemas": [
+    {
+      "name": "AuthorizeError",
+      "base": "BaseModel",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/schemas/auth.py",
+      "fields": [
+        "error",
+        "error_description",
+        "error_uri"
+      ]
+    },
+    {
+      "name": "AuthorizeRedirectError",
+      "base": "BaseModel",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/schemas/auth.py",
+      "fields": [
+        "error",
+        "error_description",
+        "error_uri"
+      ]
+    },
+    {
+      "name": "LoginError",
+      "base": "BaseModel",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/schemas/auth.py",
+      "fields": [
+        "error",
+        "error_description",
+        "error_uri"
+      ]
+    },
+    {
+      "name": "TokenResponse",
+      "base": "BaseModel",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/schemas/auth.py",
+      "fields": [
+        "access_token",
+        "id_token",
+        "token_type",
+        "expires_in",
+        "refresh_token"
+      ]
+    },
+    {
+      "name": "TokenError",
+      "base": "BaseModel",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/schemas/auth.py",
+      "fields": [
+        "error",
+        "error_description",
+        "error_uri"
+      ]
+    },
+    {
+      "name": "LogoutError",
+      "base": "BaseModel",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/schemas/auth.py",
+      "fields": [
+        "error",
+        "error_description",
+        "error_uri"
+      ]
+    },
+    {
+      "name": "ClientCreate",
+      "base": "BaseModel",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/schemas/client.py",
+      "fields": [
+        "name",
+        "first_party",
+        "client_type",
+        "redirect_uris",
+        "authorization_code_lifetime_seconds",
+        "access_id_token_lifetime_seconds",
+        "refresh_token_lifetime_seconds",
+        "tenant_id"
+      ]
+    },
+    {
+      "name": "ClientUpdate",
+      "base": "BaseModel",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/schemas/client.py",
+      "fields": [
+        "name",
+        "first_party",
+        "client_type",
+        "redirect_uris",
+        "authorization_code_lifetime_seconds",
+        "access_id_token_lifetime_seconds",
+        "refresh_token_lifetime_seconds"
+      ]
+    },
+    {
+      "name": "EmailTemplateUpdate",
+      "base": "BaseModel",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/schemas/email_template.py",
+      "fields": [
+        "subject",
+        "content"
+      ]
+    },
+    {
+      "name": "UUIDSchema",
+      "base": "BaseModel",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/schemas/generics.py",
+      "fields": [
+        "id"
+      ]
+    },
+    {
+      "name": "CreatedUpdatedAt",
+      "base": "BaseModel",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/schemas/generics.py",
+      "fields": [
+        "created_at",
+        "updated_at"
+      ]
+    },
+    {
+      "name": "PaginatedResults",
+      "base": "BaseModel",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/schemas/generics.py",
+      "fields": [
+        "count",
+        "results"
+      ]
+    },
+    {
+      "name": "Address",
+      "base": "BaseModel",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/schemas/generics.py",
+      "fields": [
+        "line1",
+        "line2",
+        "postal_code",
+        "city",
+        "state",
+        "country"
+      ]
+    },
+    {
+      "name": "OAuthError",
+      "base": "BaseModel",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/schemas/oauth.py",
+      "fields": [
+        "error",
+        "error_description",
+        "error_uri"
+      ]
+    },
+    {
+      "name": "OAuthProviderCreate",
+      "base": "BaseModel",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/schemas/oauth_provider.py",
+      "fields": [
+        "provider",
+        "client_id",
+        "client_secret",
+        "scopes",
+        "name",
+        "openid_configuration_endpoint",
+        "_validate_openid_provider"
+      ]
+    },
+    {
+      "name": "OAuthProviderUpdate",
+      "base": "BaseModel",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/schemas/oauth_provider.py",
+      "fields": [
+        "client_id",
+        "client_secret",
+        "scopes",
+        "name",
+        "openid_configuration_endpoint"
+      ]
+    },
+    {
+      "name": "PermissionCreate",
+      "base": "BaseModel",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/schemas/permission.py",
+      "fields": [
+        "name",
+        "codename"
+      ]
+    },
+    {
+      "name": "PermissionUpdate",
+      "base": "BaseModel",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/schemas/permission.py",
+      "fields": [
+        "name",
+        "codename"
+      ]
+    },
+    {
+      "name": "RoleCreate",
+      "base": "BaseModel",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/schemas/role.py",
+      "fields": [
+        "name",
+        "granted_by_default",
+        "permissions"
+      ]
+    },
+    {
+      "name": "RoleUpdate",
+      "base": "BaseModel",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/schemas/role.py",
+      "fields": [
+        "name",
+        "granted_by_default",
+        "permissions"
+      ]
+    },
+    {
+      "name": "TenantCreate",
+      "base": "BaseModel",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/schemas/tenant.py",
+      "fields": [
+        "name",
+        "registration_allowed",
+        "theme_id",
+        "logo_url",
+        "application_url",
+        "oauth_providers"
+      ]
+    },
+    {
+      "name": "TenantUpdate",
+      "base": "BaseModel",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/schemas/tenant.py",
+      "fields": [
+        "name",
+        "registration_allowed",
+        "theme_id",
+        "logo_url",
+        "application_url",
+        "oauth_providers"
+      ]
+    },
+    {
+      "name": "UserFields",
+      "base": "BaseModel",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/schemas/user.py",
+      "fields": []
+    },
+    {
+      "name": "UserCreate",
+      "base": "BaseModel",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/schemas/user.py",
+      "fields": [
+        "email",
+        "password",
+        "fields"
+      ]
+    },
+    {
+      "name": "UserChangeEmail",
+      "base": "BaseModel",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/schemas/user.py",
+      "fields": [
+        "email"
+      ]
+    },
+    {
+      "name": "UserVerifyEmail",
+      "base": "BaseModel",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/schemas/user.py",
+      "fields": [
+        "code"
+      ]
+    },
+    {
+      "name": "UserChangePassword",
+      "base": "BaseModel",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/schemas/user.py",
+      "fields": [
+        "password"
+      ]
+    },
+    {
+      "name": "UserUpdate",
+      "base": "BaseModel",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/schemas/user.py",
+      "fields": [
+        "fields"
+      ]
+    },
+    {
+      "name": "CreateAccessToken",
+      "base": "BaseModel",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/schemas/user.py",
+      "fields": [
+        "client_id",
+        "scopes"
+      ]
+    },
+    {
+      "name": "AccessTokenResponse",
+      "base": "BaseModel",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/schemas/user.py",
+      "fields": [
+        "access_token",
+        "token_type",
+        "expires_in"
+      ]
+    },
+    {
+      "name": "UserFieldConfigurationBase",
+      "base": "BaseModel",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/schemas/user_field.py",
+      "fields": [
+        "at_registration",
+        "required",
+        "at_update"
+      ]
+    },
+    {
+      "name": "UserFieldCreate",
+      "base": "BaseModel",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/schemas/user_field.py",
+      "fields": [
+        "name",
+        "slug",
+        "type",
+        "configuration"
+      ]
+    },
+    {
+      "name": "UserFieldUpdate",
+      "base": "BaseModel",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/schemas/user_field.py",
+      "fields": [
+        "name",
+        "slug",
+        "configuration"
+      ]
+    },
+    {
+      "name": "UserPermissionCreate",
+      "base": "BaseModel",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/schemas/user_permission.py",
+      "fields": [
+        "id"
+      ]
+    },
+    {
+      "name": "UserRoleCreate",
+      "base": "BaseModel",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/schemas/user_role.py",
+      "fields": [
+        "id"
+      ]
+    },
+    {
+      "name": "WebhookCreate",
+      "base": "BaseModel",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/schemas/webhook.py",
+      "fields": [
+        "url",
+        "events"
+      ]
+    },
+    {
+      "name": "WebhookUpdate",
+      "base": "BaseModel",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/schemas/webhook.py",
+      "fields": [
+        "url",
+        "events"
+      ]
+    },
+    {
+      "name": "OAuth2AuthorizationServerMetadata",
+      "base": "BaseModel",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/schemas/well_known.py",
+      "fields": [
+        "issuer",
+        "authorization_endpoint",
+        "token_endpoint",
+        "jwks_uri",
+        "registration_endpoint",
+        "scopes_supported",
+        "response_types_supported",
+        "response_modes_supported",
+        "grant_types_supported",
+        "token_endpoint_auth_methods_supported",
+        "token_endpoint_auth_signing_alg_values_supported",
+        "service_documentation",
+        "ui_locales_supported",
+        "op_policy_uri",
+        "op_tos_uri",
+        "revocation_endpoint",
+        "revocation_endpoint_auth_methods_supported",
+        "revocation_endpoint_auth_signing_alg_values_supported",
+        "introspection_endpoint",
+        "introspection_endpoint_auth_methods_supported",
+        "introspection_endpoint_auth_signing_alg_values_supported",
+        "code_challenge_methods_supported"
+      ]
+    }
+  ],
+  "orm_models": [
+    {
+      "name": "AdminAPIKey",
+      "tablename": "admin_api_key",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/models/admin_api_key.py",
+      "columns": [
+        "name",
+        "token"
+      ]
+    },
+    {
+      "name": "AdminSessionToken",
+      "tablename": "admin_session_tokens",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/models/admin_session_token.py",
+      "columns": [
+        "token",
+        "raw_tokens",
+        "raw_userinfo"
+      ]
+    },
+    {
+      "name": "AuditLog",
+      "tablename": "audit_logs",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/models/audit_log.py",
+      "columns": [
+        "timestamp",
+        "level",
+        "message",
+        "extra",
+        "subject_user_id",
+        "object_id",
+        "object_class",
+        "admin_user_id",
+        "admin_api_key_id",
+        "subject_user"
+      ]
+    },
+    {
+      "name": "AuthorizationCode",
+      "tablename": "authorization_codes",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/models/authorization_code.py",
+      "columns": [
+        "code",
+        "c_hash",
+        "redirect_uri",
+        "scope",
+        "authenticated_at",
+        "nonce",
+        "acr",
+        "code_challenge",
+        "code_challenge_method",
+        "user_id",
+        "user",
+        "client_id",
+        "client"
+      ]
+    },
+    {
+      "name": "Client",
+      "tablename": "clients",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/models/client.py",
+      "columns": [
+        "name",
+        "first_party",
+        "client_type",
+        "client_id",
+        "client_secret",
+        "redirect_uris",
+        "encrypt_jwk",
+        "authorization_code_lifetime_seconds",
+        "access_id_token_lifetime_seconds",
+        "refresh_token_lifetime_seconds",
+        "tenant_id",
+        "tenant"
+      ]
+    },
+    {
+      "name": "EmailDomain",
+      "tablename": "email_domains",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/models/email_domain.py",
+      "columns": [
+        "email_provider",
+        "domain_id",
+        "domain",
+        "_records"
+      ]
+    },
+    {
+      "name": "EmailTemplate",
+      "tablename": "email_templates",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/models/email_template.py",
+      "columns": [
+        "type",
+        "subject",
+        "content"
+      ]
+    },
+    {
+      "name": "EmailVerification",
+      "tablename": "email_verifications",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/models/email_verification.py",
+      "columns": [
+        "code",
+        "email",
+        "user_id",
+        "user"
+      ]
+    },
+    {
+      "name": "BaseModel",
+      "tablename": "",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/models/generics.py",
+      "columns": []
+    },
+    {
+      "name": "UUIDModel",
+      "tablename": "",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/models/generics.py",
+      "columns": [
+        "id"
+      ]
+    },
+    {
+      "name": "Grant",
+      "tablename": "grants",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/models/grant.py",
+      "columns": [
+        "scope",
+        "user_id",
+        "user",
+        "client_id",
+        "client"
+      ]
+    },
+    {
+      "name": "LoginSession",
+      "tablename": "login_sessions",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/models/login_session.py",
+      "columns": [
+        "token",
+        "response_type",
+        "response_mode",
+        "redirect_uri",
+        "scope",
+        "prompt",
+        "state",
+        "nonce",
+        "acr",
+        "code_challenge",
+        "code_challenge_method",
+        "client_id",
+        "client"
+      ]
+    },
+    {
+      "name": "OAuthAccount",
+      "tablename": "oauth_accounts",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/models/oauth_account.py",
+      "columns": [
+        "access_token",
+        "expires_at",
+        "refresh_token",
+        "account_id",
+        "account_email",
+        "oauth_provider_id",
+        "oauth_provider",
+        "user_id",
+        "user",
+        "tenant_id",
+        "tenant"
+      ]
+    },
+    {
+      "name": "OAuthProvider",
+      "tablename": "oauth_providers",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/models/oauth_provider.py",
+      "columns": [
+        "provider",
+        "client_id",
+        "client_secret",
+        "scopes",
+        "name",
+        "openid_configuration_endpoint"
+      ]
+    },
+    {
+      "name": "OAuthSession",
+      "tablename": "oauth_sessions",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/models/oauth_session.py",
+      "columns": [
+        "token",
+        "redirect_uri",
+        "oauth_provider_id",
+        "oauth_provider",
+        "oauth_account_id",
+        "oauth_account",
+        "tenant_id",
+        "tenant"
+      ]
+    },
+    {
+      "name": "Permission",
+      "tablename": "permissions",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/models/permission.py",
+      "columns": [
+        "name",
+        "codename"
+      ]
+    },
+    {
+      "name": "RefreshToken",
+      "tablename": "refresh_tokens",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/models/refresh_token.py",
+      "columns": [
+        "token",
+        "scope",
+        "authenticated_at",
+        "user_id",
+        "user",
+        "client_id",
+        "client"
+      ]
+    },
+    {
+      "name": "RegistrationSession",
+      "tablename": "registration_sessions",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/models/registration_session.py",
+      "columns": [
+        "token",
+        "flow",
+        "email",
+        "oauth_account_id",
+        "oauth_account",
+        "tenant_id",
+        "tenant"
+      ]
+    },
+    {
+      "name": "Role",
+      "tablename": "roles",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/models/role.py",
+      "columns": [
+        "name",
+        "granted_by_default",
+        "permissions",
+        "user_permissions"
+      ]
+    },
+    {
+      "name": "SessionToken",
+      "tablename": "session_tokens",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/models/session_token.py",
+      "columns": [
+        "token",
+        "user_id",
+        "user"
+      ]
+    },
+    {
+      "name": "Tenant",
+      "tablename": "tenants",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/models/tenant.py",
+      "columns": [
+        "name",
+        "slug",
+        "default",
+        "sign_jwk",
+        "registration_allowed",
+        "application_url",
+        "theme_id",
+        "theme",
+        "logo_url",
+        "oauth_providers",
+        "email_from_email",
+        "email_from_name",
+        "email_domain_id",
+        "email_domain"
+      ]
+    },
+    {
+      "name": "Theme",
+      "tablename": "themes",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/models/theme.py",
+      "columns": [
+        "name",
+        "default",
+        "primary_color",
+        "primary_color_hover",
+        "primary_color_light",
+        "input_color",
+        "input_color_background",
+        "light_color",
+        "light_color_hover",
+        "text_color",
+        "accent_color",
+        "background_color",
+        "font_size",
+        "font_family",
+        "font_css_url"
+      ]
+    },
+    {
+      "name": "User",
+      "tablename": "users",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/models/user.py",
+      "columns": [
+        "email",
+        "email_lower",
+        "email_verified",
+        "hashed_password",
+        "is_active",
+        "tenant_id",
+        "tenant",
+        "user_field_values"
+      ]
+    },
+    {
+      "name": "UserField",
+      "tablename": "user_fields",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/models/user_field.py",
+      "columns": [
+        "name",
+        "slug",
+        "type",
+        "configuration",
+        "user_field_values"
+      ]
+    },
+    {
+      "name": "UserFieldValue",
+      "tablename": "user_field_values",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/models/user_field_value.py",
+      "columns": [
+        "value_string",
+        "value_integer",
+        "value_boolean",
+        "value_date",
+        "value_datetime",
+        "value_json",
+        "user_id",
+        "user",
+        "user_field_id",
+        "user_field"
+      ]
+    },
+    {
+      "name": "UserPermission",
+      "tablename": "user_permissions",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/models/user_permission.py",
+      "columns": [
+        "user_id",
+        "permission_id",
+        "from_role_id",
+        "user",
+        "permission",
+        "from_role"
+      ]
+    },
+    {
+      "name": "UserRole",
+      "tablename": "user_roles",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/models/user_role.py",
+      "columns": [
+        "user_id",
+        "role_id",
+        "user",
+        "role"
+      ]
+    },
+    {
+      "name": "Webhook",
+      "tablename": "webhooks",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/models/webhook.py",
+      "columns": [
+        "url",
+        "secret",
+        "events"
+      ]
+    },
+    {
+      "name": "WebhookLog",
+      "tablename": "webhook_logs",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/models/webhook_log.py",
+      "columns": [
+        "webhook_id",
+        "event",
+        "attempt",
+        "payload",
+        "success",
+        "response",
+        "error_type",
+        "error_message",
+        "webhook"
+      ]
+    }
+  ],
+  "services": [
+    {
+      "name": "UserRolePermissionsService",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/services/user_role_permissions.py",
+      "methods": [
+        "add_role_permissions",
+        "delete_role_permissions"
+      ]
+    },
+    {
+      "name": "UserRolesService",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/fief/fief/services/user_roles.py",
+      "methods": [
+        "add_role",
+        "delete_role",
+        "add_default_roles"
+      ]
+    }
+  ],
+  "components": [],
+  "api_functions": []
+}

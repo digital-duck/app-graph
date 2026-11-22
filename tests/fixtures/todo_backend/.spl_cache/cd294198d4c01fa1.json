@@ -1,0 +1,6 @@
+{
+  "node": "requirements",
+  "tech_profile": "python_fastapi",
+  "cached_at": "2026-08-12T03:41:44.485509+00:00",
+  "code": "```\nfastapi>=0.111.0\nsqlalchemy>=2.0.0\npydantic>=2.0.0\nuvicorn[standard]>=0.29.0\npytest>=8.0.0\nhttpx>=0.27.0\n```"
+}

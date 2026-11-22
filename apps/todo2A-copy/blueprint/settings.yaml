@@ -1,0 +1,10 @@
+# ── App-scoped settings for todo2A ───────────────────────────────────────
+# Referenced from any *.graph.yaml under this blueprint/ directory as
+# ${{ settings.KEY }} (see docs/DEV/BUILD/refactoring-plan-v1.md §1.2).
+settings:
+  - key: BACKEND_FASTAPI_PORT
+    value: 8020
+    comment: FastAPI backend port
+  - key: FRONTEND_VITE_PORT
+    value: 5190
+    comment: Vite dev server port

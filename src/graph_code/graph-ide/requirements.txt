@@ -1,0 +1,6 @@
+fastapi>=0.111.0
+uvicorn[standard]>=0.30.0
+pyyaml>=6.0
+ruamel.yaml>=0.18.0
+# graph-code itself is not on PyPI — install it editable from the repo root
+# first: pip install -e ".[dev]" (see the repo's own CLAUDE.md).

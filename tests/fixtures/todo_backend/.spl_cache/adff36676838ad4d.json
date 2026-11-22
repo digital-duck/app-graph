@@ -1,0 +1,6 @@
+{
+  "node": "orm_model",
+  "tech_profile": "python_fastapi",
+  "cached_at": "2026-08-15T19:32:23.675780+00:00",
+  "code": "```python\nfrom __future__ import annotations\n\nfrom sqlalchemy.orm import Mapped, mapped_column\n\nfrom app.database import Base\n\n\nclass TodoModel(Base):\n    __tablename__ = \"todos\"\n\n    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)\n    title: Mapped[str]\n    completed: Mapped[bool] = mapped_column(default=False)\n```"
+}

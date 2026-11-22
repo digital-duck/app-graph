@@ -1,0 +1,223 @@
+# ── Unified Duality Graph Schema v2.1 — Software Profile ────────────────────
+# Migrated to a fully buildable blueprint (2026-08-13) from a minimal 1-node
+# pattern-reference fixture (see apps/README.md's fixtures table) — that
+# earlier version had no spec.interface/spec.contract detailed enough for
+# code generation, no requirements/readme doc nodes, no tech_profile. This
+# version follows the same authoring convention as apps/todo/, apps/dispatch/,
+# apps/expense/'s backend.graph.yaml files, just for a standalone library
+# (no HTTP layer, no frontend, no system-level main.graph.yaml — a single
+# component built directly via build_component.spl, not build_app.spl).
+domain: software/security/jwt
+target_languages: [python]
+comment: |
+  JWT token issuing and verification library: HMAC-SHA256 signing, expiry
+  handling, and typed decode results. No web framework, no database — pure
+  library code, consumed by other components (e.g. apps/physics_app/blueprint/
+  auth_middleware.graph.yaml's future real implementation).
+capstone: jwt_core
+
+tech_profile: python_library
+# No `port:` — this is a standalone library, not an HTTP-serving component;
+# `component_port()`/`check_port_consistency()` are only meaningful for
+# components a system-level main.graph.yaml's `ports:` block references,
+# and jwt_provider has no such system graph.
+
+blueprint:
+  id: jwt_provider
+  schema_version: "2.2"
+  graph_schema_version: "2.1"
+  domain_type: software
+  provenance: authored
+  parent_blueprint: null
+  lineage: []
+
+form:
+  primitives:
+    python:
+      defines: "Python 3.x runtime and standard library"
+      tier: 0
+      kind: config
+    pyjwt:
+      defines: "PyJWT library: JWT encoding/decoding, HMAC/RSA signing algorithms"
+      tier: 0
+      kind: config
+
+  nodes:
+    requirements:
+      kind: doc
+      defines: "requirements.txt: pinned pip dependencies for this library"
+      composed_of: [python, pyjwt]
+      tier: 1
+      spec:
+        interface: |
+          Output: requirements.txt at the component root (NOT under app/) — plain pip
+          requirements format, one package per line, not Python code.
+        contract: |
+          List the pip packages needed to install and use this library, with minimum-version
+          pins (>=): pyjwt, pytest.
+          One package per line, e.g. `pyjwt>=2.8.0`. No comments, no section headers, no pip
+          install command — just the requirements.txt file content itself.
+      verification:
+        node: |
+          - requirements.txt exists at component root
+          - contains pyjwt and pytest
+      docs: |
+        - Same convention as apps/todo/, apps/dispatch/, apps/expense/'s requirements node
+
+    jwt_schemas:
+      kind: concept
+      defines: "TokenPayload: the typed result of a successful token verification"
+      composed_of: [python]
+      tier: 1
+      spec:
+        interface: |
+          from __future__ import annotations
+          from dataclasses import dataclass
+          from datetime import datetime
+          from typing import Any
+
+          @dataclass(frozen=True)
+          class TokenPayload:
+              claims: dict[str, Any]
+              expires_at: datetime
+        contract: |
+          claims holds every claim from the decoded token EXCEPT "exp" (which is extracted
+          into expires_at instead, as a proper datetime rather than a raw Unix timestamp int).
+          Frozen dataclass — TokenPayload is a read-only result value, never mutated after
+          construction.
+          expires_at MUST be constructed via datetime.fromtimestamp(exp_claim, tz=timezone.utc)
+          — timezone-aware, not naive — so callers can safely compare it against
+          datetime.now(timezone.utc) without a TypeError.
+      verification:
+        node: |
+          - TokenPayload is a frozen dataclass (attempting to set an attribute after
+            construction raises FrozenInstanceError)
+          - claims does not contain an "exp" key
+          - expires_at is a timezone-aware datetime
+      docs: |
+        - The only data type this library exposes to callers besides plain str/dict
+
+    jwt_core:
+      kind: module
+      defines: "Signs and verifies JWT tokens using HMAC-SHA256"
+      composed_of: [pyjwt, jwt_schemas]
+      tier: 2
+      ports:
+        issue_token:
+          signature: "(payload: dict, secret: str, expires_in: int) -> str"
+          kind: call
+          direction: out
+        verify_token:
+          signature: "(token: str, secret: str) -> TokenPayload"
+          kind: call
+          direction: out
+      spec:
+        interface: |
+          from __future__ import annotations
+          import jwt as _pyjwt
+          from datetime import datetime, timedelta, timezone
+          from app.schemas import TokenPayload
+
+          def issue_token(payload: dict, secret: str, expires_in: int) -> str: ...
+          def verify_token(token: str, secret: str) -> TokenPayload: ...
+        contract: |
+          issue_token(payload, secret, expires_in):
+            - copies payload, adds an "exp" claim = datetime.now(timezone.utc) +
+              timedelta(seconds=expires_in), encoded via _pyjwt.encode(..., algorithm="HS256")
+            - does NOT mutate the caller's payload dict in place
+            - returns the encoded token as a str
+            - raises ValueError if expires_in <= 0 (a token that's already expired or expires
+              immediately is a caller bug, not something to silently encode)
+
+          verify_token(token, secret):
+            - calls _pyjwt.decode(token, secret, algorithms=["HS256"])
+            - on success: pops "exp" from the decoded dict, converts it to a timezone-aware
+              datetime via datetime.fromtimestamp(exp, tz=timezone.utc), returns
+              TokenPayload(claims=remaining_dict, expires_at=that_datetime)
+            - on jwt.ExpiredSignatureError: re-raise as-is (do NOT catch and wrap — callers
+              distinguish "expired" from "malformed/tampered" by exception type)
+            - on jwt.InvalidTokenError (covers InvalidSignatureError, DecodeError, and any
+              other PyJWT decode failure): re-raise as-is, same reasoning
+            - MUST import PyJWT as `import jwt as _pyjwt` (aliased) — NOT `import jwt` bare,
+              since that name would collide with this module's own filename/import context in
+              some tooling; the alias makes every PyJWT call site unambiguous
+      verification:
+        node: |
+          - issue_token then verify_token round-trips: original payload keys/values (minus
+            "exp") appear in the returned TokenPayload.claims
+          - verify_token on an expired token raises jwt.ExpiredSignatureError
+          - verify_token on a token signed with a different secret raises
+            jwt.InvalidTokenError (or a subclass of it)
+          - verify_token on a garbage/non-JWT string raises jwt.InvalidTokenError (or a
+            subclass of it)
+          - issue_token with expires_in=0 or a negative value raises ValueError
+        edge: |
+          - TokenPayload returned by verify_token matches the shape declared in jwt_schemas
+          - the "exp" claim never leaks into TokenPayload.claims
+      docs: |
+        - Deliberately synchronous, no I/O beyond CPU-bound crypto — safe to call from any
+          context (sync or async caller) without needing an event loop
+
+    readme:
+      kind: doc
+      defines: "README.md: what this library does, how to install it, and its public API"
+      composed_of: [jwt_core]
+      tier: 3
+      spec:
+        interface: |
+          Output: README.md at the component root (NOT under app/) — plain Markdown, not code.
+          Do NOT follow the Python code-style conventions above for this file; those apply to
+          source files only. This file is prose documentation.
+          CRITICAL: output ONLY the Markdown document itself — no preamble narration, no
+          tool-call syntax, no commentary before or after the document (a prior generation on
+          a different app leaked raw tool-call XML into exactly this kind of node — see
+          docs/DEV/BUILD/README-TODO.md §4/§6 for the real incidents this instruction guards
+          against).
+        contract: |
+          Must include, as Markdown sections:
+          - Title + one-paragraph description of what this library does (JWT issuing and
+            verification, HMAC-SHA256, no web framework or database dependency)
+          - Prerequisites: Python version, how to install dependencies (pip install -r
+            requirements.txt)
+          - Usage: a short code example showing issue_token() then verify_token() on the
+            result, including the TokenPayload shape
+          - Running tests: exact command (pytest tests/)
+          - API summary: issue_token and verify_token signatures from jwt_core's ports below,
+            one line each
+        content_outline: |
+          # <Component name>
+          One paragraph description.
+          ## Prerequisites
+          ## Usage
+          ## Running tests
+          ## API
+      verification:
+        node: |
+          - README.md exists at component root
+          - contains headings for prerequisites, usage, running tests, and API
+      docs: |
+        - Generated last, same convention as apps/todo/, apps/dispatch/, apps/expense/'s readme
+
+function:
+  exports:
+    - name: issue_token
+      kind: port
+      from: jwt_core.issue_token
+      signature: "(payload: dict, secret: str, expires_in: int) -> str"
+    - name: verify_token
+      kind: port
+      from: jwt_core.verify_token
+      signature: "(token: str, secret: str) -> TokenPayload"
+      comment: |
+        This library's entire public surface. No system-level main.graph.yaml —
+        jwt_provider is a standalone component consumed by other components'
+        composed_of (e.g. a future real auth_middleware implementation), built
+        directly via build_component.spl, not build_app.spl.
+
+verification:
+  - node: jwt_schemas
+    backend: pytest
+    tests: tests/test_schemas.py
+  - node: jwt_core
+    backend: pytest
+    tests: tests/test_jwt_core.py

@@ -1,0 +1,249 @@
+# ── Unified Duality Graph Schema v2.1 — Integrated Profile (Graph of Graphs) ─
+# Migrated from graph-driven-workflow/apps/SPL/fastapi/system.yaml
+#
+# Backend-only app (no frontend component), same shape as apps/dispatch/ —
+# single-entry `imports:`, thin main.graph.yaml with just the system-level
+# `applications:` view of the backend's routes.
+domain: software/apps/fastapi
+target_languages: [python]
+comment: |
+  FastAPI + SQLAlchemy 2.0 Item CRUD API — backend-only Path-B migration of
+  example-fastapi-sqlachemy-pytest (Tim Hughes example). Smallest of the
+  ported reference apps: single entity (Item), Integer autoincrement PK,
+  DB-level unique name constraint with 409-on-conflict, dual lookup (by id
+  and by name).
+capstone: manage_items
+
+# Source of truth for id/version/domain_type — see
+# docs/DEV/BUILD/refactoring-plan-v1.md §1.1.
+blueprint:
+  id: fastapi_app
+  schema_version: "2.2"
+  graph_schema_version: "2.1"
+  domain_type: integrated
+  provenance: authored
+  parent_blueprint: null
+  lineage: []
+
+imports:
+  - id: backend
+    graph: ./backend.graph.yaml
+    comment: |
+      FastAPI REST API at :8005, OpenAPI schema at /docs, CORS open. The only
+      component — this app has no frontend, per BRIEF.md's scope decision
+      (source repo has none either).
+
+# ── Port configuration (system-level, orchestration metadata) ────────────────
+ports:
+  backend: ${{ settings.BACKEND_FASTAPI_PORT }}
+
+form:
+  nodes:
+    fastapi_app_shell:
+      kind: component
+      defines: "System integration shell: the backend API, exposed standalone (no frontend to compose with)"
+      tier: 1
+      depends_on: [backend]
+
+    readme:
+      kind: doc
+      defines: "README.md: product-level overview, setup, and run instructions for the whole fastapi app"
+      composed_of: [fastapi_app_shell]
+      tier: 2
+      spec:
+        interface: |
+          Output: README.md at the system root (the same directory as this graph.yaml, or
+          --output_dir when integrate_system.spl was run with one) — plain Markdown, not code.
+        contract: |
+          Must include, as Markdown sections:
+          - Title + one-paragraph description (Item CRUD API: Integer PK, unique name
+            constraint, dual lookup by id and by name)
+          - Architecture: single FastAPI backend at :8005, no frontend — one sentence, link to
+            the backend's own README.md for its own setup/run/test instructions
+          - Running the full system: build it (`spl3 run spl/build_app.spl ...`), then start
+            the backend
+          - Applications: one line per application from this graph's `applications:` block
+        content_outline: |
+          # <App name>
+          One paragraph description.
+          ## Architecture
+          ## Running the full system
+          ## Applications
+      verification:
+        node: |
+          - README.md exists at the system root
+          - contains headings for architecture, running the full system, and applications
+      docs: |
+        - Same convention as apps/dispatch/blueprint/main.graph.yaml's readme node — generated
+          last by integrate_system.spl with real pass/fail results embedded
+
+function:
+  exports:
+    - name: manage_items
+      kind: port
+      from: fastapi_app_shell.main
+      signature: "() -> void"
+      comment: |
+        Single entry point. Serves the backend API. The system capstone — every
+        node in the backend component graph exists in service of this workflow.
+
+# ── System-level applications ────────────────────────────────────────────────
+applications:
+
+  user_creates_item:
+    defines: |
+      - POST /api/v1/items/ creates a named item; 409 on duplicate name
+    needs:
+      backend: [api_routes]
+    tier: 1
+    spec:
+      user_story: |
+        - User sends {name, description} to POST /api/v1/items/; receives ItemPublic with
+          integer id
+      contract: |
+        - 201 on success; 409 if name already exists
+        - ItemPublic has id (int), name (str), description (str | None)
+    verification: |
+      - create test + duplicate-name-409 test pass
+    docs: |
+      - Entry point of the CRUD lifecycle
+
+  user_lists_items:
+    defines: |
+      - GET /api/v1/items/ returns a paginated list of items
+    needs:
+      backend: [api_routes]
+    tier: 1
+    spec:
+      user_story: |
+        - User GETs /api/v1/items/?skip=0&limit=100; receives list[ItemPublic]
+      contract: |
+        - 200 always; empty list [] when no items; skip/limit pagination
+        - Test setup fixture (creating items to list/paginate): POST /api/v1/items/ body is
+          exactly {"name": ..., "description": ...} — the Item request field is named "name",
+          NOT "title". POST returns 201 on success, not 200.
+    verification: |
+      - list-empty test + pagination test pass
+    docs: |
+      - Read-side, page 1 of 2 (list vs single-item lookup)
+
+  user_reads_item_by_id:
+    defines: |
+      - GET /api/v1/items/{item_id} returns a single item by integer id
+    needs:
+      backend: [api_routes]
+    tier: 1
+    spec:
+      user_story: |
+        - User GETs /api/v1/items/{item_id}; receives ItemPublic
+      contract: |
+        - 200 on found; 404 if item_id not in DB
+        - Test setup fixture (creating an item to read back): POST /api/v1/items/ body is
+          exactly {"name": ..., "description": ...} — the Item request field is named "name",
+          NOT "title". POST returns 201 with the item's real id — use THAT id for the GET,
+          do NOT assume id=1. Any item created by an earlier acceptance-test application may
+          already have been deleted by that application's own cleanup, so id=1 is not
+          guaranteed to exist.
+    verification: |
+      - get-by-id test + missing-404 test pass
+    docs: |
+      - Read-side, first lookup axis (by primary key)
+
+  user_reads_item_by_name:
+    defines: |
+      - GET /api/v1/items/by-name/{name} returns a single item by unique name
+    needs:
+      backend: [api_routes]
+    tier: 1
+    spec:
+      user_story: |
+        - User GETs /api/v1/items/by-name/{name}; receives ItemPublic
+      contract: |
+        - 200 on found; 404 if name not in DB
+        - Route MUST be registered before /{item_id} in the router (see backend.graph.yaml's
+          api_routes contract) — this is the genuinely new structural feature vs apps/todo/
+          and apps/dispatch/, neither of which needs a second lookup axis
+        - Test setup fixture (creating an item to look up by name): POST /api/v1/items/ body is
+          exactly {"name": ..., "description": ...} — the Item request field is named "name",
+          NOT "title". Use a name unique to this test run (e.g. include a random/uuid suffix);
+          POST returns 201 — use THAT exact name for the by-name GET, do NOT assume a fixed
+          name like "Widget" is free, since another acceptance-test application may already
+          have claimed it.
+    verification: |
+      - get-by-name test + missing-404 test pass
+    docs: |
+      - Read-side, second lookup axis (by natural/unique key) — the reason this app exists
+        as a distinct pattern from todo/dispatch
+
+  user_updates_item:
+    defines: |
+      - PUT /api/v1/items/{item_id} updates name and/or description
+    needs:
+      backend: [api_routes]
+    tier: 1
+    spec:
+      user_story: |
+        - User PUTs {name: "Gadget"} to /api/v1/items/1; receives updated ItemPublic
+      contract: |
+        - 200 on success; 404 if not found; 409 if new name conflicts with a DIFFERENT item
+        - Renaming an item to its own current name (no-op rename) must NOT raise 409
+        - Test setup fixture (creating an item to update): POST /api/v1/items/ returns 201
+          on success, NOT 200 — 200 is the PUT response's own status code, not POST's
+    verification: |
+      - update-name test + update-description-only test + missing-404 test +
+        name-conflict-409 test + rename-to-same-name-is-ok test all pass
+    docs: |
+      - Exercises the same conflict-check logic as create, on the update path
+
+  user_deletes_item:
+    defines: |
+      - DELETE /api/v1/items/{item_id} removes an item
+    needs:
+      backend: [api_routes]
+    tier: 1
+    spec:
+      user_story: |
+        - User DELETEs /api/v1/items/{item_id}; receives 204
+      contract: |
+        - 204 on success; 404 if not found; subsequent GET returns 404
+        - Test setup fixture (creating an item to delete): POST /api/v1/items/ body is
+          exactly {"name": ..., "description": ...} — the Item request field is named "name",
+          NOT "title". POST returns 201 with the item's real id — use THAT id for the DELETE,
+          do NOT assume id=1.
+    verification: |
+      - delete-204 test + delete-then-get-404 test + missing-404 test all pass
+    docs: |
+      - Closes the lifecycle
+
+  manage_items:
+    defines: |
+      - Full item lifecycle: create -> list -> get by name -> update -> delete
+    needs:
+      applications: [user_creates_item, user_lists_items, user_reads_item_by_id,
+                     user_reads_item_by_name, user_updates_item, user_deletes_item]
+    tier: 2
+    capstone: true
+    spec:
+      user_story: |
+        1. POST /api/v1/items/ {"name": "Widget"} -> ItemPublic {id:1, name:"Widget"}
+        2. GET /api/v1/items/ -> [{id:1, name:"Widget"}]
+        3. GET /api/v1/items/by-name/Widget -> {id:1, name:"Widget"}
+        4. PUT /api/v1/items/1 {"name": "Gadget"} -> {id:1, name:"Gadget"}
+        5. DELETE /api/v1/items/1 -> 204
+        6. GET /api/v1/items/ -> []
+      contract: |
+        Integer PK increments; unique name enforced; full CRUD round-trip
+    verification: |
+      - all component applications pass
+      - golden path reachable in sequence
+    docs: |
+      - The capstone — confirms integer PK, unique name constraint, and full CRUD completion
+
+verification:
+  - node: fastapi_app_shell
+    tool: integrate_system.spl
+    checks:
+      - CORS headers present on all backend responses
+      - all system applications pass acceptance tests against the live backend
+    docs: |
+      - README.md (product-level) — see the `readme` node above

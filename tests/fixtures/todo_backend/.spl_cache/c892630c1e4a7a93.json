@@ -1,0 +1,6 @@
+{
+  "node": "db_connection",
+  "tech_profile": "python_fastapi",
+  "cached_at": "2026-08-12T03:36:37.145428+00:00",
+  "code": "```python\nfrom __future__ import annotations\n\nfrom collections.abc import Generator\n\nfrom sqlalchemy import create_engine\nfrom sqlalchemy.orm import DeclarativeBase, Session, sessionmaker\n\nSQLALCHEMY_DATABASE_URL = \"sqlite:///./app.db\"\n\nengine = create_engine(\n    SQLALCHEMY_DATABASE_URL,\n    connect_args={\"check_same_thread\": False},  # SQLite requires this for multi-threaded use\n)\n\nSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)\n\n\nclass Base(DeclarativeBase):\n    pass\n\n\ndef get_db() -> Generator[Session, None, None]:\n    db = SessionLocal()\n    try:\n        yield db\n    finally:\n        db.close()\n```"
+}

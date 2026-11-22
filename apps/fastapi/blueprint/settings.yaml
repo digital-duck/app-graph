@@ -1,0 +1,8 @@
+# ── App-scoped settings for fastapi_app ────────────────────────────────────
+# Referenced from any *.graph.yaml under this blueprint/ directory as
+# ${{ settings.KEY }} (see docs/DEV/BUILD/refactoring-plan-v1.md §1.2).
+# Backend-only app — no FRONTEND_VITE_PORT (no frontend component).
+settings:
+  - key: BACKEND_FASTAPI_PORT
+    value: 8005
+    comment: FastAPI backend port

@@ -1,0 +1,114 @@
+{
+  "stack": {
+    "backend": {},
+    "frontend": {}
+  },
+  "routes": [
+    {
+      "method": "GET",
+      "path": "/",
+      "status_code": 200,
+      "response_model": "unknown",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/todo1/server/main.py"
+    },
+    {
+      "method": "GET",
+      "path": "/tasks/",
+      "status_code": 200,
+      "response_model": "List[schemas.Task]",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/todo1/server/main.py"
+    },
+    {
+      "method": "GET",
+      "path": "/task/{task_id}",
+      "status_code": 200,
+      "response_model": "schemas.Task",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/todo1/server/main.py"
+    },
+    {
+      "method": "DELETE",
+      "path": "/task/{task_id}",
+      "status_code": 200,
+      "response_model": "unknown",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/todo1/server/main.py"
+    },
+    {
+      "method": "POST",
+      "path": "/tasks/",
+      "status_code": 200,
+      "response_model": "schemas.Task",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/todo1/server/main.py"
+    },
+    {
+      "method": "PUT",
+      "path": "/task/{task_id}",
+      "status_code": 200,
+      "response_model": "unknown",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/todo1/server/main.py"
+    }
+  ],
+  "schemas": [
+    {
+      "name": "TaskBase",
+      "base": "BaseModel",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/todo1/server/schemas.py",
+      "fields": [
+        "description",
+        "date",
+        "is_completed"
+      ]
+    }
+  ],
+  "orm_models": [
+    {
+      "name": "Task",
+      "tablename": "tasks",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/todo1/server/models.py",
+      "columns": []
+    }
+  ],
+  "services": [],
+  "components": [
+    {
+      "name": "ToDo",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/todo1/client/src/components/ToDo.vue",
+      "has_fetch": false,
+      "has_props": false,
+      "has_emits": false,
+      "has_mounted": false
+    },
+    {
+      "name": "ToDoCharts",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/todo1/client/src/components/ToDoCharts.vue",
+      "has_fetch": false,
+      "has_props": false,
+      "has_emits": false,
+      "has_mounted": false
+    },
+    {
+      "name": "ToDoFilter",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/todo1/client/src/components/ToDoFilter.vue",
+      "has_fetch": false,
+      "has_props": false,
+      "has_emits": false,
+      "has_mounted": false
+    },
+    {
+      "name": "ToDoForm",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/todo1/client/src/components/ToDoForm.vue",
+      "has_fetch": true,
+      "has_props": false,
+      "has_emits": false,
+      "has_mounted": false
+    },
+    {
+      "name": "ToDoList",
+      "source": "/home/gongai/projects/wgong/graph-code-apps/todo1/client/src/components/ToDoList.vue",
+      "has_fetch": true,
+      "has_props": false,
+      "has_emits": false,
+      "has_mounted": false
+    }
+  ],
+  "api_functions": []
+}

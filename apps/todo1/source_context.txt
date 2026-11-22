@@ -1,0 +1,422 @@
+--- server/main.py ---
+from typing import List
+
+from fastapi import FastAPI, Depends, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy.orm import Session
+
+import crud, models, schemas
+from database import SessionLocal, engine
+
+models.Base.metadata.create_all(bind=engine)
+
+app = FastAPI()
+
+origins = ["http://localhost:8080"]
+ 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+@app.get("/")
+async def root():
+    return {"message": "Hello World"}
+
+
+@app.get("/tasks/", response_model=List[schemas.Task])
+def read_tasks(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+    tasks = crud.get_tasks(db, skip=skip, limit=limit)
+    return tasks
+
+
+@app.get("/task/{task_id}", response_model=schemas.Task)
+def read_task(task_id: int, db: Session = Depends(get_db)):
+    db_task = crud.get_task(db, task_id=task_id)
+    if db_task is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+    return db_task
+
+
+@app.delete("/task/{task_id}")
+def delete_task(task_id: int, db: Session = Depends(get_db)):
+    db_task = crud.get_task(db, task_id=task_id)
+    if db_task is None:
+        raise HTTPException(
+            status_code=404, 
+            detail="Task doesn't exist and cannot be deleted")
+    else:
+        crud.delete_task(db, task_id=task_id)
+
+
+@app.post("/tasks/", response_model=schemas.Task)
+def create_task(task: schemas.TaskCreate, db: Session = Depends(get_db)):
+    return crud.create_task(db=db, task=task)
+
+
+@app.put("/task/{task_id}")
+def update_task(task_id: int, task: schemas.TaskUpdate, db: Session = Depends(get_db)):
+    db_task = crud.get_task(db, task_id=task_id)
+    if db_task is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Task doesn't exist and cannot be updated"
+        )
+    else:
+        crud.update_task(db, task_id, task)
+
+--- server/schemas.py ---
+from typing import List, Optional
+from datetime import datetime
+
+from pydantic import BaseModel
+
+class TaskBase(BaseModel):
+    description: str
+    date: datetime
+    is_completed: bool
+
+
+class TaskCreate(TaskBase):
+    pass
+
+
+class TaskUpdate(TaskBase):
+    pass
+
+
+class Task(TaskBase):
+    id: int
+
+    class Config:
+        orm_mode = True
+
+--- server/models.py ---
+from sqlalchemy import Column, Integer, String, Boolean, DateTime
+
+from database import Base
+
+class Task(Base):
+    __tablename__ = "tasks"
+
+    id = Column(Integer, primary_key=True, index=True)
+    description = Column(String, index=True)
+    date = Column(DateTime, index=True)
+    is_completed = Column(Boolean, index=True)
+--- client/src/components/ToDo.vue ---
+<template>
+    <div class="column is-half-desktop mt-5">
+        <ToDoForm></ToDoForm>
+    </div>
+</template>
+
+<script>
+import ToDoForm from "../components/ToDoForm.vue"
+
+export default {
+    name: "ToDo",
+    components: {
+        ToDoForm
+    }
+}
+</script>
+
+--- client/src/components/ToDoCharts.vue ---
+<template>
+    <div :class="[{'is-active':modalState}, 'modal']">
+        <div class="modal-background" @click="closeModal"></div>
+        <div class="modal-card">
+            <header class="modal-card-head">
+                <p class="modal-card-title">Statistics</p>
+                <button class="delete" aria-label="close" @click="closeModal"></button>
+            </header>
+            <section class="modal-card-body">
+                <canvas id="myChart" width="400" height="400"></canvas>
+            </section>
+        </div>
+    </div>
+</template>
+
+<script>
+import { Chart, registerables } from 'chart.js';
+Chart.register(...registerables);
+
+import {chartData} from "../chartData.js"
+
+export default {
+    name: "ToDoCharts",
+    props: {
+        modalState: Boolean
+    },
+    data() {
+        return {
+            chartData: chartData
+        }
+    },
+    methods: {
+        closeModal() {
+            this.$emit("closeModal")
+        }
+    },
+    mounted() {
+        const ctx = document.getElementById('myChart')
+        new Chart(ctx, this.chartData)
+    }
+}                
+</script>
+
+--- client/src/components/ToDoFilter.vue ---
+<template>
+    <div class="columns box pt-0 pb-0">
+        <div class="column is-11">
+            <span 
+                v-for="(tag, index) in tags"
+                :key="tag.id" 
+                class="tag ml-1" 
+                @click="toggleTag(index)"
+                :class="[{'is-light': !tag.isEnable}, tag.color]">
+                {{ tag.name }}
+            </span>
+        </div>
+        <div class="column is-1">
+            <button class="button is-link is-small" @click="toggleModal">
+                <i class="fas fa-chart-bar"></i>
+            </button>
+        </div>
+        <ToDoCharts v-bind:modalState="modalState" @close-modal="toggleModal"></ToDoCharts>
+    </div>  
+</template>
+
+<script>
+import ToDoCharts from "../components/ToDoCharts.vue"
+
+export default {
+    name: "ToDoFilter",
+    components: {
+        ToDoCharts
+    },
+    data() {
+        return {
+            tags: [
+                { name: "Today", color: "is-primary", isEnable: true },
+                { name: "Yesterday", color: "is-warning", isEnable: true },
+                { name: "Earlier", color: "is-danger", isEnable: true },
+                { name: "Completed", color: "is-info", isEnable: true },
+            ],
+            modalState: false
+        }
+    },
+    methods: {
+        toggleTag(index) {
+            this.tags[index].isEnable ^= true
+            let disabledTags = this.tags.filter(tag => !tag.isEnable)
+            let disabledNames = disabledTags.map(tag => tag.name)
+            
+            this.$emit("tag-toggled", disabledNames)
+        },
+        toggleModal() {
+            this.modalState ^= true
+        }
+    }
+}
+</script>
+
+--- client/src/components/ToDoForm.vue ---
+<template>
+    <div>
+        <!--
+        <h1 class="title is-offset-one-quarter has-text-centered">ToDo</h1>
+        -->
+        <form class="box" @submit.prevent="onSubmit">
+            <div class="column columns">
+                <input 
+                    class="input is-primary" 
+                    v-model="taskDescription" 
+                    type="text" 
+                    id="taskDescription" 
+                    placeholder="New Task">
+                <button class="button ml-1 is-primary">ADD</button>
+            </div>
+        </form>
+        <ToDoList ref="todoList" v-bind:tasks="tasks"></ToDoList>
+    </div>
+</template>
+
+<script>
+import ToDoList from "../components/ToDoList.vue"
+
+export default {
+    name: "ToDoForm",
+    components: {
+        ToDoList
+    },
+    data() {
+        return {
+            taskDescription: "",
+            tasks: new Map(),
+        }
+    },
+    methods: {
+        async onSubmit() {
+            if (this.taskDescription === "") {
+                return
+            }
+            
+            const requestOptions = {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ 
+                    description: this.taskDescription,
+                    date: new Date(),
+                    is_completed: false
+                })
+            }
+
+            await fetch("http://127.0.0.1:8090/tasks/", requestOptions)
+                .then(response => response.json())
+                .then(data => {
+                    data.date = new Date(data.date)
+                    data.isCompleted = data.is_completed
+                    data.isVisible = true
+                    this.tasks.set(data.id, data)
+                    this.$refs.todoList.taskUpdate();
+                })
+                .catch(error => console.error(error))
+            
+            this.taskDescription = ""
+        },
+        async getAllTasks() {
+            await fetch("http://localhost:8090/tasks")
+                .then(response => response.json())
+                .then(data => {
+                    for (let task of data) {
+                        task.date = new Date(task.date)
+                        task.isCompleted = task.is_completed
+                        task.isVisible = true
+                        this.tasks.set(task.id, task)
+                    }
+                    this.$refs.todoList.taskUpdate();
+                })
+        }
+    }, 
+    async mounted() {
+        await this.getAllTasks()
+    }
+}
+</script>
+--- client/src/components/ToDoList.vue ---
+<template>
+    <div v-show="activeTasks.size > 0 || completedTasks.size > 0" class="box">
+        <ToDoFilter @tag-toggled="onTagToggled"></ToDoFilter>
+        <ul>
+            <li v-for="task of activeTasks.values()" :key="task.id">
+                <div v-show="task.isVisible" class="column columns is-vcentered">
+                    <div class="column is-11">
+                        <label class="label is-size-6" :class="{'task-completed':task.isCompleted}">
+                            <button                                 
+                                type="button"
+                                v-show="!task.isCompleted"
+                                @click="completeTask(task.id)" 
+                                name="{{ task.description }}" 
+                                value="{{ task.description }}">
+                                <span class="icon is-small">
+                                    <i class="fas fa-check"></i>
+                                </span>
+                            </button>
+                            {{ task.description }}
+                            <span 
+                                v-if="isToday(task.date)" 
+                                class="tag task-tag is-primary">
+                                Today
+                            </span>
+                            <span 
+                                v-else-if="isYesterday(task.date)" 
+                                class="tag task-tag is-warning">
+                                Yesterday
+                            </span>
+                            <span 
+                                v-else-if="isEarlier(task.date)" 
+                                class="tag task-tag is-danger">
+                                Earlier
+                            </span>
+                        </label>
+                    </div>
+                    <div class="column is-1">
+                        <button @click="deleteTask(task.id)" class="delete"></button>
+                    </div>
+                </div>
+            </li>
+            <li 
+                v-for="task of completedTasks.values()" :key="task.id">
+                <div v-show="task.isVisible" class="column columns is-vcentered">
+                    <div class="column is-11">
+                        <label class="label is-size-6" :class="{'task-completed':task.isCompleted}">
+                            {{ task.description }}
+                            <span 
+                                class="tag task-tag is-info">
+                                Completed
+                            </span>
+                        </label>
+                    </div>
+                    <div class="column is-1">
+                        <button @click="deleteTask(task.id)" class="delete"></button>
+                    </div>
+                </div>
+            </li>
+        </ul>
+    </div>
+</template>
+
+<script>
+import ToDoFilter from "../components/ToDoFilter.vue"
+
+export default {
+    name: "ToDoList",
+    components: {
+        ToDoFilter
+    },
+    props: {
+        tasks: Map
+    },
+    data() {
+        return {
+            today: new Date(),
+            completedTasks: new Map(),
+            activeTasks: new Map(),
+        }
+    },
+    methods: {
+        async deleteTask(taskID) {
+            const requestOptionsDelete = {
+                method: "DELETE",
+                headers: { "Content-Type": "application/json" },
+                body: null,
+                url: "http://localhost:8090",
+                credentials: 'include',
+                mode: "cors"
+            }
+
+            const url = "http://localhost:8090/task/" + taskID
+            await fetch(url, requestOptionsDelete)
+                .then(response => response.json())
+                .then(data => {
+                    console.log(data)
+                    this.tasks.delete(taskID)
+                    this.taskUpdate()
+                })
+            
+        },
+        async completeTask(taskID) {
+     
+... (truncated)

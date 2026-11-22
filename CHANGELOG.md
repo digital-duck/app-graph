@@ -1,0 +1,12 @@
+# Changelog
+
+## 0.1.1
+
+- The fief example (`apps/fief/blueprint/component.graph.yaml`) now has a `blueprint:` id, so every bundled example graph loads (fixes `test_example_files_load`). No code changes.
+
+## 0.1.0
+
+First release on PyPI, as `grafcode` (`pip install grafcode`; the import package is `graph_code`). `graph.yaml` as an app or curriculum blueprint (Unified Duality Graph Schema v2.1+): form and function spaces, events, transitions, call contracts, aliased imports, drift and clustering, with the `grafcode` / `gfc` command line.
+
+- The form-space algorithms (`acyclic`, `reducible`, `productivity_order`, `learning_path`, `gap`, `build_order`) run on [zinet](https://pypi.org/project/zinet/) (>=0.2.0), shared with GraphLang and work-graph. Results are unchanged; `acyclic` no longer enumerates every cycle (it was exponential on dense cycles).
+- Requires Python 3.11 or newer (spl-llm needs it).

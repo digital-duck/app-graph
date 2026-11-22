@@ -1,0 +1,79 @@
+# ── Unified Duality Graph Schema v2.1 — Hybrid Profile (Graph of Graphs) ────
+domain: software/simulation/physics
+target_languages: [python, javascript]
+comment: |
+  Top-level application shell composing the physics simulator and optional
+  authentication middleware into a deployable desktop/web application.
+capstone: run_app
+
+# Note (2026-08-13, migration to a fully buildable blueprint): unlike
+# apps/todo/blueprint/main.graph.yaml, this system has no HTTP server anywhere
+# in its component tree — both `simulator` and `auth` are plain Python
+# libraries. `spl3 run spl/build_app.spl` unconditionally runs
+# integrate_system.spl as its last stage, which assumes a live backend to
+# start and REST `applications:` to acceptance-test (see integrate_system.spl's
+# start_backend_server/wait_for_http calls) — neither applies here. Each
+# component is built directly via build_component.spl instead (same as
+# apps/jwt_provider/, which also has no system-level main.graph.yaml at all).
+# This main.graph.yaml still exists and is still schema-valid because its real
+# purpose is demonstrating graph-of-graphs composition itself (imports:,
+# optionally_depends_on:, a cross-graph function.calls contract) — see
+# docs/DEV/BUILD/blueprint-schema-v2.2.md §6's "contract-application" vs.
+# "concept-book" distinction — not to be run end-to-end through the
+# REST-integration pipeline todo/dispatch/expense share.
+
+blueprint:
+  id: physics_app
+  schema_version: "2.2"
+  graph_schema_version: "2.1"
+  domain_type: integrated
+  provenance: authored
+  parent_blueprint: null
+  lineage: []
+
+imports:
+  - id: simulator
+    graph: ./physics_simulator.graph.yaml
+    comment: |
+      The core simulation engine. Mandatory.
+  - id: auth
+    graph: ./auth_middleware.graph.yaml
+    optional: true
+    comment: |
+      Authentication is optional for the desktop version.
+      Required only for the web deployment.
+
+form:
+  nodes:
+    app_shell:
+      kind: component
+      defines: "Top-level application shell with navigation and lifecycle management"
+      tier: 1
+      depends_on: [simulator]
+      optionally_depends_on: [auth]
+      comment: |
+        The shell mounts the simulator unconditionally and wraps it with
+        the auth middleware only when deployed to the web.
+
+function:
+  calls:
+    - id: shell_uses_simulator
+      from: app_shell.render_simulator
+      to: simulator.calculate_velocity
+      contract:
+        consumer_requires: "(x: float, dt: float) -> float"
+        provider_guarantees: "(x: float, dt: float) -> float"
+
+  exports:
+    - name: run_app
+      kind: port
+      from: app_shell.main
+      signature: "() -> void"
+      comment: |
+        Single entry point. Bootstraps the event loop, mounts all
+        components, and starts the application.
+
+verification:
+  - node: app_shell
+    backend: pytest
+    tests: tests/test_app_shell.py

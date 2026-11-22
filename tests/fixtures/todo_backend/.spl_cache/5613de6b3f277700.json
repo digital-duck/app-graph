@@ -1,0 +1,6 @@
+{
+  "node": "data_schema",
+  "tech_profile": "python_fastapi",
+  "cached_at": "2026-08-15T19:32:20.815998+00:00",
+  "code": "```python\nfrom __future__ import annotations\n\nfrom pydantic import BaseModel, ConfigDict, field_validator\n\n\nclass TodoCreate(BaseModel):\n    title: str\n\n    @field_validator(\"title\")\n    @classmethod\n    def title_must_not_be_blank(cls, v: str) -> str:\n        stripped = v.strip()\n        if not stripped:\n            raise ValueError(\"title must not be empty\")\n        return stripped\n\n\nclass Todo(BaseModel):\n    model_config = ConfigDict(from_attributes=True)\n\n    id: int\n    title: str\n    completed: bool = False\n\n\nclass ToggleRequest(BaseModel):\n    completed: bool\n```"
+}

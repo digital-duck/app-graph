@@ -1,0 +1,535 @@
+# ── Unified Duality Graph Schema v2.1 — Software Profile ────────────────────
+# Migrated from graph-driven-workflow/apps/SPL/fullstack/components/frontend/graph.yaml
+#
+# Reference app's frontend is React + TanStack Router + shadcn/ui; this GDW
+# target reimplements it in Vue 3 + Vite (this repo's standard frontend
+# stack), re-specified from the reference's observed behaviour rather than
+# its React code. Frontend scope excludes an admin panel (superuser/RBAC is
+# backend-only, see backend.graph.yaml's comment) and password recovery UI —
+# login + items CRUD + logout only.
+domain: software/frontend/vue
+target_languages: [typescript]
+comment: |
+  Vue 3 / TypeScript frontend: JWT auth (localStorage token + reactive login
+  state), login gate, item CRUD dashboard.
+capstone: App_vue
+
+# tech_profile/port: see backend.graph.yaml's comment — orchestration
+# metadata for spl/tools.py's system-level tools, not part of the core schema.
+tech_profile: vue_typescript
+port: ${{ settings.FRONTEND_VITE_PORT }}
+
+# Source of truth for id/version/domain_type — see
+# docs/DEV/BUILD/refactoring-plan-v1.md §1.1.
+blueprint:
+  id: fullstack_app_frontend
+  schema_version: "2.2"
+  graph_schema_version: "2.1"
+  domain_type: software
+  provenance: authored
+  parent_blueprint: null
+  lineage: []
+
+imports:
+  - id: backend
+    graph: ./backend.graph.yaml
+    comment: |
+      The backend REST API is a mandatory dependency. api_client's six calls
+      are verified against backend's six exported endpoint contracts below —
+      a mismatch (e.g. wrong HTTP verb, wrong signature) fails check_call_contracts
+      at graph-load time instead of at integration time.
+
+form:
+  primitives:
+    vuejs:
+      defines: "Vue 3: reactive component system, Composition API, directives"
+      tier: 0
+      kind: config
+    typescript:
+      defines: "TypeScript: static types, interfaces, generics"
+      tier: 0
+      kind: config
+    vite:
+      defines: "Vite: dev server, HMR, module bundler"
+      tier: 0
+      kind: config
+
+  nodes:
+    api_client:
+      kind: module
+      defines: "Fetch wrappers for all backend endpoints; handles Bearer auth header"
+      composed_of: [typescript]
+      tier: 1
+      ports:
+        login_for_token:
+          signature: "POST /api/v1/login/access-token (form-data: username, password) -> Token"
+          kind: call
+          direction: out
+        get_me:
+          signature: "GET /api/v1/users/me (Authorization: Bearer) -> UserPublic"
+          kind: call
+          direction: out
+        get_items:
+          signature: "GET /api/v1/items/ (Authorization: Bearer, ?skip=&limit=) -> ItemsPublic"
+          kind: call
+          direction: out
+        create_item:
+          signature: "POST /api/v1/items/ (Authorization: Bearer, title: string, description?: string) -> ItemPublic"
+          kind: call
+          direction: out
+        update_item:
+          signature: "PUT /api/v1/items/{id} (Authorization: Bearer, title?: string, description?: string) -> ItemPublic"
+          kind: call
+          direction: out
+        delete_item:
+          signature: "DELETE /api/v1/items/{id} (Authorization: Bearer) -> Message"
+          kind: call
+          direction: out
+      spec:
+        interface: |
+          # src/api.ts
+          const BASE = "/api/v1"
+
+          export interface UserPublic {
+            id: string; email: string; is_active: boolean; is_superuser: boolean;
+            full_name?: string; created_at?: string
+          }
+          export interface ItemPublic {
+            id: string; title: string; description?: string; owner_id: string; created_at?: string
+          }
+          export interface ItemsPublic { data: ItemPublic[]; count: number }
+          export interface Token { access_token: string; token_type: string }
+          export interface Message { message: string }
+
+          export async function loginForToken(email: string, password: string): Promise<Token>
+          export async function getMe(token: string): Promise<UserPublic>
+          export async function getItems(token: string, skip?: number, limit?: number): Promise<ItemsPublic>
+          export async function createItem(token: string, title: string, description?: string): Promise<ItemPublic>
+          export async function updateItem(token: string, id: string, data: { title?: string; description?: string }): Promise<ItemPublic>
+          export async function deleteItem(token: string, id: string): Promise<Message>
+        contract: |
+          loginForToken: POST /api/v1/login/access-token with Content-Type: application/x-www-form-urlencoded
+            body: `username=${encodeURIComponent(email)}&password=${encodeURIComponent(password)}`.
+            Returns Token. Throws Error on !response.ok.
+          getMe: GET /api/v1/users/me with Authorization: Bearer <token>.
+          getItems: GET /api/v1/items/ with Authorization header; optional ?skip=&limit= query params.
+          createItem: POST /api/v1/items/ with JSON { title, description } + Authorization header.
+          updateItem: PUT /api/v1/items/{id} with JSON body + Authorization header.
+          deleteItem: DELETE /api/v1/items/{id} with Authorization header.
+          All functions: if (!response.ok) throw new Error(`HTTP ${response.status}`).
+          Content-Type: application/json on POST + PUT.
+          BASE = "/api/v1" (Vite proxy rewrites /api → http://localhost:8004).
+      verification:
+        node: |
+          - all functions exported
+          - loginForToken uses application/x-www-form-urlencoded
+          - other functions use JSON
+          - Authorization header present on authenticated calls
+        edge: |
+          - loginForToken path matches api_routes /api/v1/login/access-token
+          - getItems path matches /api/v1/items/
+      docs: |
+        - Single HTTP coupling point; login uses form-data (OAuth2), everything else JSON
+
+    auth_store:
+      kind: module
+      defines: "useAuth composable: JWT token in localStorage, reactive login state"
+      composed_of: [vuejs, typescript, api_client]
+      tier: 1
+      spec:
+        interface: |
+          # src/auth.ts
+          import { ref, computed } from 'vue'
+          import { loginForToken, getMe } from './api'
+          import type { UserPublic } from './api'
+
+          const token = ref<string | null>(localStorage.getItem('access_token'))
+          const currentUser = ref<UserPublic | null>(null)
+
+          export function useAuth() {
+            const isLoggedIn = computed(() => !!token.value)
+
+            async function login(email: string, password: string): Promise<void>
+            function logout(): void
+            async function fetchCurrentUser(): Promise<void>
+
+            return { isLoggedIn, token, currentUser, login, logout, fetchCurrentUser }
+          }
+        contract: |
+          token is module-level ref so it persists across component mounts (singleton pattern).
+          login(email, password):
+            1. const result = await loginForToken(email, password)
+            2. token.value = result.access_token
+            3. localStorage.setItem('access_token', result.access_token)
+            4. await fetchCurrentUser()
+          logout():
+            token.value = null
+            currentUser.value = null
+            localStorage.removeItem('access_token')
+          fetchCurrentUser():
+            if (token.value) currentUser.value = await getMe(token.value)
+          isLoggedIn = computed(() => !!token.value)
+          On module load: token initialised from localStorage — user stays logged in on page refresh.
+      verification:
+        node: |
+          - login() stores token in localStorage + updates isLoggedIn
+          - logout() clears both
+          - isLoggedIn reactive to token.value
+          - fetchCurrentUser calls getMe with stored token
+        edge: |
+          - loginForToken called from login()
+          - getMe called from fetchCurrentUser()
+          - token passed to api functions
+      docs: |
+        - First auth state in this app family: singleton composable, not per-component state
+
+    LoginForm:
+      kind: component
+      defines: "Login form: email + password inputs, calls auth_store.login(), emits loggedIn"
+      composed_of: [vuejs, typescript, auth_store]
+      tier: 2
+      spec:
+        interface: |
+          Props: none
+          Emits: loggedIn()
+          State:
+            email: Ref<string>
+            password: Ref<string>
+            error: Ref<string>
+            loading: Ref<boolean>
+          Template:
+            <form @submit.prevent="handleSubmit">
+              <input v-model="email" type="email" placeholder="Email" required />
+              <input v-model="password" type="password" placeholder="Password" required />
+              <p v-if="error">{{ error }}</p>
+              <button type="submit" :disabled="loading">Login</button>
+              <p>Don't have an account? <a href="#">Sign up</a></p>
+            </form>
+        contract: |
+          handleSubmit:
+            loading.value = true; error.value = ''
+            try { await login(email.value, password.value); emit('loggedIn') }
+            catch (e) { error.value = 'Invalid email or password' }
+            finally { loading.value = false }
+          No redirect — parent (App_vue) handles navigation by watching isLoggedIn.
+          The "Sign up" link is static markup only (no wired self-registration flow in this
+          frontend — POST /api/v1/users/signup is exercised by backend pytest only; see
+          main.graph.yaml's user_registers application, which lists this component under
+          `needs.frontend` for the link's presence, not for an actual signup submission).
+          Imports useAuth from '../auth'.
+      verification:
+        node: |
+          - mock login
+          - submit form → login called with email+password
+          - on success → loggedIn emitted
+          - on failure → error shown
+          - loading state during submit
+          - renders a signup link
+        edge: |
+          - login() from useAuth called
+          - loggedIn emitted on success
+      docs: |
+        - Sign-up link is presentational only — see contract note above
+
+    ItemForm:
+      kind: component
+      defines: "Dual-mode item form: create (item=null) or edit (item=ItemPublic)"
+      composed_of: [vuejs, typescript, api_client, auth_store]
+      tier: 2
+      spec:
+        interface: |
+          Props:
+            item: ItemPublic | null       (null = create mode; ItemPublic = edit mode)
+          Emits:
+            saved(item: ItemPublic)
+            cancelled()
+          State:
+            title: Ref<string>
+            description: Ref<string>
+            error: Ref<string>
+        contract: |
+          On mount (onMounted): if item prop is not null, populate title + description from it.
+          handleSubmit:
+            const { token } = useAuth()
+            if (!title.value.trim()) { error.value = 'Title is required'; return }
+            if (item prop is null):
+              result = await createItem(token.value!, title.value, description.value || undefined)
+            else:
+              result = await updateItem(token.value!, item.id, { title: title.value, description: description.value || undefined })
+            emit('saved', result)
+          Cancel button → emit('cancelled').
+          Imports createItem, updateItem from '../api'; useAuth from '../auth'.
+      verification:
+        node: |
+          - create mode: mock createItem
+          - fill title
+          - submit → createItem called → saved emitted
+          - edit mode: pre-populated
+          - submit → updateItem called
+          - empty title → error
+          - cancel → cancelled emitted
+        edge: |
+          - createItem called with token + title
+          - updateItem called with token + id + data
+      docs: |
+        - Dual-mode form: null item prop selects create vs edit at the type level
+
+    ItemList:
+      kind: component
+      defines: "Presentational item list: renders rows with Edit + Delete buttons"
+      composed_of: [vuejs, typescript]
+      tier: 3
+      spec:
+        interface: |
+          Props:
+            items: ItemPublic[]
+          Emits:
+            edit(item: ItemPublic)
+            delete(id: string)
+          Template:
+            <div v-if="items.length === 0">No items yet.</div>
+            <table v-else>
+              <tr v-for="item in items" :key="item.id">
+                <td>{{ item.title }}</td>
+                <td>{{ item.description ?? '' }}</td>
+                <td>
+                  <button @click="$emit('edit', item)">Edit</button>
+                  <button @click="$emit('delete', item.id)">Delete</button>
+                </td>
+              </tr>
+            </table>
+        contract: |
+          No fetch calls — purely presentational.
+          Empty state shows "No items yet." when items array is empty.
+          Edit button emits full ItemPublic (for pre-population in ItemForm).
+          Delete button emits item.id (string UUID).
+          Import ItemPublic from '../api'.
+      verification:
+        node: |
+          - mount with items prop
+          - verify rows rendered
+          - edit button → 'edit' emitted with item
+          - delete button → 'delete' emitted with id
+          - empty array → empty state
+        edge: |
+          - no api calls
+          - events carry correct payload
+      docs: |
+        - Purely presentational — owns no state, issues no fetch calls
+
+    ItemDashboard:
+      kind: component
+      defines: "Stateful root for items: owns items state, orchestrates CRUD and form dialog"
+      composed_of: [vuejs, typescript, api_client, auth_store, ItemForm, ItemList]
+      tier: 4
+      spec:
+        interface: |
+          Props: none
+          State:
+            items: Ref<ItemPublic[]>
+            editItem: Ref<ItemPublic | null>   (null = create mode; ItemPublic = edit mode)
+            showForm: Ref<boolean>
+          Methods exposed to template:
+            loadItems(): void
+            handleCreate(): void
+            handleEdit(item: ItemPublic): void
+            handleDelete(id: string): void
+            handleSaved(item: ItemPublic): void
+            handleCancelled(): void
+            handleLogout(): void
+        contract: |
+          On mount (onMounted): await loadItems()
+          loadItems(): const { token } = useAuth(); const result = await getItems(token.value!, undefined, undefined);
+            items.value = result.data
+            CRITICAL: call getItems with all three positional arguments explicitly —
+            getItems(token.value!, undefined, undefined) — even though skip/limit are
+            optional in api_client's signature. The pre-authored test asserts
+            expect(getItems).toHaveBeenCalledWith("test-token", undefined, undefined);
+            omitting the trailing undefined, undefined arguments fails that exact assertion.
+          handleCreate(): editItem.value = null; showForm.value = true
+          handleEdit(item): editItem.value = item; showForm.value = true
+          handleDelete(id): await deleteItem(token.value!, id); await loadItems()
+          handleSaved(item): showForm.value = false; editItem.value = null; await loadItems()
+          handleCancelled(): showForm.value = false; editItem.value = null
+          handleLogout(): logout() from useAuth(); (App_vue reacts to isLoggedIn change)
+
+          Template:
+            <div>
+              <h1>Items</h1>
+              <button @click="handleLogout">Logout</button>
+              <button @click="handleCreate">New Item</button>
+              <ItemForm v-if="showForm" :item="editItem" @saved="handleSaved" @cancelled="handleCancelled" />
+              <ItemList v-else :items="items" @edit="handleEdit" @delete="handleDelete" />
+            </div>
+          Import getItems, deleteItem from '../api'; useAuth from '../auth'; ItemForm, ItemList.
+      verification:
+        node: |
+          - mock api
+          - mount
+          - getItems called on mount
+          - handleCreate → showForm true + editItem null
+          - handleDelete calls deleteItem + reload
+          - handleSaved hides form + reloads
+          - handleLogout calls logout()
+        edge: |
+          - ItemList receives items
+          - ItemForm receives editItem
+          - getItems called with token from auth_store
+      docs: |
+        - Single stateful root for the items workflow; all four CRUD operations pass through here
+
+    App_vue:
+      kind: component
+      defines: "Root component: auth gate — shows LoginForm or ItemDashboard based on isLoggedIn"
+      composed_of: [vuejs, typescript, auth_store, LoginForm, ItemDashboard]
+      tier: 5
+      spec:
+        interface: |
+          Props: none
+          Template:
+            <LoginForm v-if="!isLoggedIn" @loggedIn="handleLoggedIn" />
+            <ItemDashboard v-else />
+        contract: |
+          const { isLoggedIn, fetchCurrentUser } = useAuth()
+          handleLoggedIn(): no-op (isLoggedIn reactive ref already updated by login() in auth_store)
+          On mount (onMounted): if (isLoggedIn.value) await fetchCurrentUser() to restore user on page reload.
+          No URL routing — isLoggedIn is the single gate.
+          Import useAuth from './auth'; LoginForm, ItemDashboard from './components/...'.
+      verification:
+        node: |
+          - mock auth_store isLoggedIn false → LoginForm shown
+          - isLoggedIn true → ItemDashboard shown
+          - loggedIn event from LoginForm → isLoggedIn reactive update
+        edge: |
+          - LoginForm emits loggedIn
+          - useAuth.isLoggedIn controls v-if
+      docs: |
+        - Single auth gate — no URL router in this app
+
+    main_ts:
+      kind: module
+      defines: "Vue application entry point"
+      composed_of: [vuejs, typescript, App_vue]
+      tier: 6
+      spec:
+        interface: |
+          - calls createApp(App).mount('#app')
+        contract: |
+          import { createApp } from 'vue'
+          import App from './App.vue'
+          createApp(App).mount('#app')
+      verification:
+        node: |
+          - file imports from 'vue' and './App.vue'
+          - calls createApp
+        edge: |
+          - App exported from App.vue is the component passed to createApp
+          - mount target '#app' matches index.html div id
+      docs: |
+        - Entry point only — no logic, no state, no other imports
+
+    readme:
+      kind: doc
+      defines: "README.md: setup, run, and test instructions for this frontend"
+      composed_of: [main_ts]
+      tier: 7
+      spec:
+        interface: |
+          Output: README.md at the component root (NOT under src/) — plain Markdown, not code.
+          Do NOT follow the Vue/TypeScript code-style conventions above for this file; those apply
+          to source files only. This file is prose documentation.
+        contract: |
+          Must include, as Markdown sections:
+          - Title + one-paragraph description of what this frontend does
+          - Prerequisites: Node.js version, how to install dependencies (npm install)
+          - Running the dev server: exact command (npm run dev) and the default URL/port
+            (http://localhost:5177), and that it expects the backend at http://localhost:8004
+            (Vite dev-server proxies /api → :8004, see vite.config.ts)
+          - Running tests: exact command (npm test)
+          - Component summary: list each component (LoginForm, ItemForm, ItemList,
+            ItemDashboard, App) with a one-line description of its role
+          - Note the default login: admin@example.com / adminpassword (auto-created by the
+            backend on first startup), since there is no wired self-registration flow here
+        content_outline: |
+          # <Component name>
+          One paragraph description.
+          ## Prerequisites
+          ## Running the dev server
+          ## Running tests
+          ## Components
+      verification:
+        node: |
+          - README.md exists at component root
+          - contains headings for prerequisites, running the dev server, running tests, and components
+      docs: |
+        - Generated last, after all code nodes, so it can describe the actual generated component set
+        - Not verified against the code (kind: doc nodes skip compile/edge-symbol checks — see
+          spl/tools.py verify_node/verify_edges)
+
+function:
+  calls:
+    - id: api_client_calls_backend_login
+      from: api_client.login_for_token
+      to: backend.login_access_token
+      contract:
+        consumer_requires: "POST /api/v1/login/access-token (form-data: username, password) -> Token"
+        provider_guarantees: "POST /api/v1/login/access-token (form-data: username, password) -> Token"
+    - id: api_client_calls_backend_get_me
+      from: api_client.get_me
+      to: backend.get_me
+      contract:
+        consumer_requires: "GET /api/v1/users/me (Authorization: Bearer) -> UserPublic"
+        provider_guarantees: "GET /api/v1/users/me (Authorization: Bearer) -> UserPublic"
+    - id: api_client_calls_backend_get_items
+      from: api_client.get_items
+      to: backend.list_items
+      contract:
+        consumer_requires: "GET /api/v1/items/ (Authorization: Bearer, ?skip=&limit=) -> ItemsPublic"
+        provider_guarantees: "GET /api/v1/items/ (Authorization: Bearer, ?skip=&limit=) -> ItemsPublic"
+    - id: api_client_calls_backend_create_item
+      from: api_client.create_item
+      to: backend.create_item
+      contract:
+        consumer_requires: "POST /api/v1/items/ (Authorization: Bearer, title: string, description?: string) -> ItemPublic"
+        provider_guarantees: "POST /api/v1/items/ (Authorization: Bearer, title: string, description?: string) -> ItemPublic"
+    - id: api_client_calls_backend_update_item
+      from: api_client.update_item
+      to: backend.update_item
+      contract:
+        consumer_requires: "PUT /api/v1/items/{id} (Authorization: Bearer, title?: string, description?: string) -> ItemPublic"
+        provider_guarantees: "PUT /api/v1/items/{id} (Authorization: Bearer, title?: string, description?: string) -> ItemPublic"
+    - id: api_client_calls_backend_delete_item
+      from: api_client.delete_item
+      to: backend.delete_item
+      contract:
+        consumer_requires: "DELETE /api/v1/items/{id} (Authorization: Bearer) -> Message"
+        provider_guarantees: "DELETE /api/v1/items/{id} (Authorization: Bearer) -> Message"
+
+  exports:
+    - name: App_vue
+      kind: port
+      from: App_vue.render
+      signature: "() -> void"
+      comment: |
+        The frontend capstone. Composed at the system level (see ./main.graph.yaml)
+        with backend's exports to form the end-to-end login + item-management applications.
+
+verification:
+  - node: api_client
+    backend: vitest
+    tests: tests/api.spec.ts
+  - node: auth_store
+    backend: vitest
+    tests: tests/auth.spec.ts
+  - node: LoginForm
+    backend: vitest
+    tests: tests/LoginForm.spec.ts
+  - node: ItemForm
+    backend: vitest
+    tests: tests/ItemForm.spec.ts
+  - node: ItemList
+    backend: vitest
+    tests: tests/ItemList.spec.ts
+  - node: ItemDashboard
+    backend: vitest
+    tests: tests/ItemDashboard.spec.ts

@@ -1,0 +1,265 @@
+# ── Unified Duality Graph Schema v2.1 — Software Profile ────────────────────
+# Migrated to a fully buildable blueprint (2026-08-13) from a minimal
+# pattern-reference fixture (see apps/README.md's fixtures table). Follows
+# the same convention as apps/jwt_provider/'s migration: plain stdlib Python
+# (tech_profile: python_library), no real ASGI/FastAPI stack wired in — the
+# request/handler/response shape is a local Protocol-typed abstraction, not a
+# literal FastAPI import, since this component is built and tested in total
+# isolation from the FastAPI apps that would eventually mount it (same reason
+# it does not literally `import` jwt_provider's package — see middleware's
+# spec.contract below for why verify_token is injected instead).
+domain: software/security/authentication
+target_languages: [python]
+comment: "Middleware that protects routes by verifying JWT tokens"
+capstone: middleware
+
+tech_profile: python_library
+# No `port:` — this is a library-shaped component (no HTTP server of its
+# own), same as apps/jwt_provider/blueprint/jwt_provider.graph.yaml.
+
+blueprint:
+  id: auth_middleware
+  schema_version: "2.2"
+  graph_schema_version: "2.1"
+  domain_type: software
+  provenance: authored
+  parent_blueprint: null
+  lineage: []
+
+imports:
+  - id: jwt
+    graph: ../../jwt_provider/blueprint/jwt_provider.graph.yaml
+    comment: |
+      The JWT provider is a mandatory *contract* dependency — its
+      issue_token/verify_token signature is what middleware_calls_jwt_verify
+      below is checked against by check_call_contracts(). It is NOT a literal
+      Python import: build_component.spl builds each component into its own
+      isolated output directory with no cross-directory import wiring, so
+      middleware.require_auth takes a verify_token callable as a constructor
+      argument instead (dependency injection) rather than importing
+      jwt_provider's generated package directly. See middleware's
+      spec.contract for the concrete signature this must match.
+
+form:
+  primitives:
+    python:
+      defines: "Python 3.x runtime"
+      tier: 0
+      kind: config
+
+  nodes:
+    requirements:
+      kind: doc
+      defines: "requirements.txt: pinned pip dependencies for this component"
+      composed_of: [python]
+      tier: 1
+      spec:
+        interface: |
+          Output: requirements.txt at the component root (NOT under app/) — plain pip
+          requirements format, one package per line, not Python code.
+        contract: |
+          This component uses only the Python standard library — no third-party runtime
+          dependency (verify_token is injected by the caller, not imported here). List
+          only the dev/test tool needed to run this component's test suite: pytest, with
+          a minimum-version pin (>=). One package per line, e.g. `pytest>=8.0.0`. No
+          comments, no section headers, no pip install command — just the requirements.txt
+          file content itself.
+      verification:
+        node: |
+          - requirements.txt exists at component root
+          - contains pytest
+      docs: |
+        - Generated early (depends only on the python primitive)
+        - Not verified against the code (kind: doc nodes skip compile/edge-symbol checks —
+          see spl/tools.py verify_node/verify_edges)
+
+    auth_attempt_logger:
+      kind: service
+      defines: "Logs authentication attempts to structured storage"
+      tier: 1
+      composed_of: [python]
+      ports:
+        log_attempt:
+          signature: "(user_id: str, success: bool, ts: datetime) -> None"
+          kind: call
+          direction: out
+      spec:
+        interface: |
+          from __future__ import annotations
+          from datetime import datetime
+
+          class AuthAttemptLogger:
+              def __init__(self) -> None: ...
+              def log_attempt(self, user_id: str, success: bool, ts: datetime) -> None: ...
+        contract: |
+          __init__ initializes an empty `log: list[tuple[str, bool, datetime]]` attribute.
+          log_attempt(user_id, success, ts) appends (user_id, success, ts) to log,
+          unmodified. Does not return anything (None). No filtering, no deduplication —
+          every call appends, including repeated failed attempts from the same user_id.
+      verification:
+        node: |
+          - calling log_attempt appends exactly one (user_id, success, ts) tuple to log
+          - log starts empty on construction
+          - two calls with different user_id values both appear in log, in call order
+      docs: |
+        - Optional. middleware functions correctly without it, but production
+          deployments should include it for compliance.
+
+    middleware:
+      kind: module
+      defines: "Protects routes by verifying JWT tokens on each request"
+      tier: 2
+      composed_of: [python]
+      optionally_depends_on: [auth_attempt_logger]
+      ports:
+        require_auth:
+          signature: "(request: Request, handler: Handler) -> Response"
+          kind: call
+          direction: out
+      spec:
+        interface: |
+          from __future__ import annotations
+          from collections.abc import Callable
+          from dataclasses import dataclass
+          from typing import Any, Protocol
+
+          @dataclass(frozen=True)
+          class Request:
+              headers: dict[str, str]
+
+          @dataclass(frozen=True)
+          class Response:
+              status_code: int
+              body: str
+
+          Handler = Callable[[Request], Response]
+
+          class _TokenPayload(Protocol):
+              claims: dict[str, Any]
+
+          class _VerifyToken(Protocol):
+              def __call__(self, token: str, secret: str) -> _TokenPayload: ...
+
+          class Middleware:
+              def __init__(
+                  self,
+                  verify_token: _VerifyToken,
+                  secret: str,
+                  audit_logger: Any | None = None,
+              ) -> None: ...
+              def require_auth(self, request: Request, handler: Handler) -> Response: ...
+        contract: |
+          __init__ stores verify_token, secret, and audit_logger (default None) as
+          instance attributes.
+
+          require_auth(request, handler):
+          - Reads request.headers.get("Authorization", ""). If it does not start with
+            "Bearer " (exact prefix, case-sensitive), returns Response(401, "Missing or
+            malformed Authorization header") without calling handler. If audit_logger is
+            not None, calls audit_logger.log_attempt("unknown", False, datetime.now(timezone.utc))
+            first.
+          - Otherwise extracts token = header[len("Bearer "):], calls
+            self.verify_token(token, self.secret) inside a try/except.
+          - On ANY exception from verify_token (expired, invalid signature, malformed —
+            this component does not need to distinguish which, unlike jwt_provider's own
+            test suite which does distinguish exception types internally): if audit_logger
+            is not None, calls audit_logger.log_attempt("unknown", False,
+            datetime.now(timezone.utc)); returns Response(401, "Invalid or expired token")
+            without calling handler.
+          - On success: user_id = str(payload.claims.get("sub", "unknown")). If
+            audit_logger is not None, calls audit_logger.log_attempt(user_id, True,
+            datetime.now(timezone.utc)). Then calls handler(request) and returns exactly
+            what handler returns.
+          - MUST import datetime/timezone from the datetime module for the
+            datetime.now(timezone.utc) calls above — timezone-aware, not naive.
+      verification:
+        node: |
+          - request with no Authorization header returns a 401 Response without calling
+            handler
+          - request with "Authorization: Bearer <token>" where the injected verify_token
+            stub raises an exception returns a 401 Response without calling handler
+          - request with "Authorization: Bearer <token>" where the injected verify_token
+            stub returns a fake payload with claims={"sub": "alice"} calls handler(request)
+            and returns exactly handler's return value
+          - when an AuthAttemptLogger is supplied, both a failed and a successful
+            require_auth call each append exactly one entry to its log
+          - when no AuthAttemptLogger is supplied (None), require_auth still works without
+            raising
+        edge: |
+          - Middleware never imports jwt_provider's package directly — verify_token is
+            always received via __init__, never imported at module level
+      docs: |
+        - The middleware's public surface — verify_token is injected so this component
+          builds and tests in complete isolation from apps/jwt_provider/'s own build
+
+    readme:
+      kind: doc
+      defines: "README.md: what this component does, how to install it, and its public API"
+      composed_of: [middleware]
+      tier: 3
+      spec:
+        interface: |
+          Output: README.md at the component root (NOT under app/) — plain Markdown, not
+          code. Do NOT follow the Python code-style conventions above for this file; those
+          apply to source files only. This file is prose documentation.
+          Output ONLY the Markdown document itself — no preamble narration, no tool-call
+          syntax, no commentary before or after the document.
+        contract: |
+          Must include, as Markdown sections:
+          - Title + one-paragraph description of what this component does (JWT-verifying
+            middleware, framework-agnostic — verify_token is injected by the caller, this
+            component does not itself depend on jwt_provider or any web framework)
+          - Prerequisites: Python version, how to install dependencies (pip install -r
+            requirements.txt)
+          - Usage: a short code example constructing a Middleware with a verify_token
+            callable and calling require_auth
+          - Running tests: exact command (pytest tests/)
+          - API summary: Middleware.require_auth and AuthAttemptLogger.log_attempt — one
+            line each
+        content_outline: |
+          # <Component name>
+          One paragraph description.
+          ## Prerequisites
+          ## Usage
+          ## Running tests
+          ## API
+      verification:
+        node: |
+          - README.md exists at component root
+          - contains headings for prerequisites, usage, running tests, and API
+      docs: |
+        - Generated last, after all code nodes
+        - Not verified against the code (kind: doc nodes skip compile/edge-symbol checks —
+          see spl/tools.py verify_node/verify_edges)
+
+function:
+  calls:
+    - id: middleware_calls_jwt_verify
+      from: middleware.require_auth
+      to: jwt.verify_token
+      contract:
+        consumer_requires: "(token: str, secret: str) -> TokenPayload"
+        provider_guarantees: "(token: str, secret: str) -> TokenPayload"
+      comment: |
+        Critical interface contract. If the JWT provider changes its
+        verify_token signature, this call edge fails at graph load time.
+        Enforced at the schema level (check_call_contracts()); the generated
+        code itself receives this same signature via dependency injection —
+        see middleware's spec.contract for why it is not a literal import.
+
+  exports:
+    - name: require_auth
+      kind: port
+      from: middleware.require_auth
+      signature: "(request: Request, handler: Handler) -> Response"
+      comment: |
+        Primary public API. Do not expose internal token_parsing or
+        error_formatting functions.
+
+verification:
+  - node: middleware
+    backend: pytest
+    tests: tests/test_middleware.py
+  - node: auth_attempt_logger
+    backend: pytest
+    tests: tests/test_auth_attempt_logger.py

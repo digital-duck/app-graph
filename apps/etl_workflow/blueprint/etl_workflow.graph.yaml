@@ -1,0 +1,381 @@
+# ── Unified Duality Graph Schema v2.1 — Workflow Profile ────────────────────
+# Migrated to a fully buildable blueprint (2026-08-13) from a minimal
+# pattern-reference fixture (see apps/README.md's fixtures table) — that
+# earlier version had no spec.interface/spec.contract detailed enough for
+# code generation, no requirements/readme doc nodes, no tech_profile. This
+# version follows the same authoring convention as apps/jwt_provider/'s
+# migration: a single component built directly via build_component.spl (no
+# system-level main.graph.yaml — a workflow graph has no other components to
+# import), tech_profile: python_library, one file per step node.
+domain: software/workflow/etl
+target_languages: [python]
+comment: |
+  Minimal ETL workflow: fetch -> transform -> load, with a bounded retry loop
+  on fetch and an error-handling branch. Demonstrates pre/execute/post phases
+  (ETL-style: pre for state prep/validation, post for formatting/routing) and
+  action-routed transitions (PocketFlow-style step dispatch).
+capstone: load_data
+
+tech_profile: python_library
+# No `port:` — a workflow pipeline, not an HTTP-serving component; no
+# system-level main.graph.yaml references it via a `ports:` block.
+
+# Source of truth for id/version/domain_type — see
+# docs/DEV/BUILD/refactoring-plan-v1.md §1.1.
+blueprint:
+  id: etl_pipeline
+  schema_version: "2.3"
+  graph_schema_version: "2.1"
+  domain_type: workflow
+  provenance: authored
+  parent_blueprint: null
+  lineage: []
+
+entry: fetch_data
+
+form:
+  primitives:
+    python:
+      defines: "Python 3.x runtime and standard library"
+      tier: 0
+      kind: config
+
+  nodes:
+    requirements:
+      kind: doc
+      defines: "requirements.txt: pinned pip dependencies for this pipeline"
+      composed_of: [python]
+      tier: 1
+      spec:
+        interface: |
+          Output: requirements.txt at the component root (NOT under app/) — plain pip
+          requirements format, one package per line, not Python code.
+        contract: |
+          The pipeline itself is pure stdlib (no third-party runtime dependency — fetch/
+          load I/O is injected by the caller, see pipeline_state's fetcher/loader fields).
+          List only the dev/test dependency needed to run this component's test suite:
+          pytest, with a minimum-version pin (>=), e.g. `pytest>=7.0.0`. One package per
+          line. No comments, no section headers, no pip install command — just the
+          requirements.txt file content itself.
+      verification:
+        node: |
+          - requirements.txt exists at component root
+          - contains pytest
+      docs: |
+        - Same convention as apps/jwt_provider/'s requirements node
+
+    pipeline_state:
+      kind: concept
+      defines: "Shared State/ExecResult types passed between pipeline steps, and the Action strings post() returns"
+      composed_of: [python]
+      tier: 1
+      spec:
+        interface: |
+          from __future__ import annotations
+          from dataclasses import dataclass, field
+          from typing import Any, Callable
+
+          @dataclass
+          class ExecResult:
+              records: list[dict[str, Any]] = field(default_factory=list)
+              error: str | None = None
+
+          @dataclass
+          class State:
+              config: dict[str, str] = field(default_factory=dict)
+              fetcher: Callable[[], list[dict[str, Any]]] | None = None
+              loader: Callable[[list[dict[str, Any]]], None] | None = None
+              records: list[dict[str, Any]] = field(default_factory=list)
+              attempts: int = 0
+              error: str | None = None
+              error_log: list[str] = field(default_factory=list)
+
+          # Action is one of: "success", "retry", "error", "default" — the four
+          # action strings named on function.transitions in the graph.yaml.
+        contract: |
+          State is mutable and passed by reference through pre/execute/post — every
+          phase function mutates and returns the SAME State instance it was given (no
+          copying), matching PocketFlow's shared-store convention.
+
+          `fetcher` and `loader` are dependency-injected callables, not real HTTP/DB
+          clients — this keeps every step pure-Python and testable without network or
+          database access. `fetcher()` takes no arguments and returns raw records (or
+          raises on failure). `loader(records)` takes the transformed records and
+          returns None (or raises on failure). Both MUST be set by the caller before
+          running fetch_data/load_data; a step calling a None fetcher/loader raises
+          ValueError (a caller bug, not something to silently no-op).
+
+          ExecResult.error is None on success, a human-readable message on failure —
+          never both records and a non-None error populated at once (a failed exec
+          result carries an empty records list).
+      verification:
+        node: |
+          - State() constructs with all-default field values (empty records, attempts=0,
+            error=None, empty error_log, fetcher=None, loader=None)
+          - ExecResult() constructs with empty records and error=None by default
+      docs: |
+        - Not a `kind: step` node — this is a shared data-type module, imported by
+          every step node below. `phases` only applies to step nodes; a `concept`
+          node like this one is generated once, like jwt_provider's jwt_schemas.
+
+    fetch_data:
+      kind: step
+      defines: "Pull raw records from the upstream API"
+      composed_of: [pipeline_state]
+      tier: 2
+      phases:
+        pre:
+          defines: "Validate query params, ensure auth token present"
+          signature: "(shared: State) -> State"
+        execute:
+          defines: "Call the API, collect raw records"
+          signature: "(shared: State) -> ExecResult"
+        post:
+          defines: "Merge exec result into shared state; pick next action"
+          signature: "(shared: State, exec_res: ExecResult) -> Action"
+      comment: |
+        Steps are not required to trace back to primitives (no depends_on here,
+        just composed_of pipeline_state for its shared types) — workflow nodes
+        are exempt from the reducibility check that curriculum/software
+        profiles use.
+      spec:
+        interface: |
+          from __future__ import annotations
+          from app.schemas import ExecResult, State
+
+          def fetch_data_pre(shared: State) -> State: ...
+          def fetch_data_execute(shared: State) -> ExecResult: ...
+          def fetch_data_post(shared: State, exec_res: ExecResult) -> str: ...
+        contract: |
+          fetch_data_pre(shared):
+            - raises ValueError if shared.config does not contain both an "api_url" and
+              an "auth_token" key (either missing key is an auth/config bug, not a
+              retryable runtime failure — fail loud, don't quietly proceed)
+            - raises ValueError if shared.fetcher is None (nothing to call)
+            - otherwise returns shared unchanged
+
+          fetch_data_execute(shared):
+            - calls shared.fetcher() with no arguments
+            - on success: returns ExecResult(records=<returned list>, error=None)
+            - on any Exception raised by shared.fetcher(): catches it and returns
+              ExecResult(records=[], error=str(exception)) — never lets the exception
+              propagate out of execute (routing to retry/error happens in post, not
+              via a raised exception)
+
+          fetch_data_post(shared, exec_res):
+            - on exec_res.error is None: sets shared.records = exec_res.records,
+              resets shared.attempts = 0, shared.error = None, returns "success"
+            - on exec_res.error is not None: increments shared.attempts by 1, sets
+              shared.error = exec_res.error; if shared.attempts < 3 returns "retry"
+              (matching function.transitions' `condition: "attempts < 3"` on the
+              fetch_data -> fetch_data retry edge); otherwise returns "error"
+      verification:
+        node: |
+          - fetch_data_pre raises ValueError when api_url or auth_token is missing
+            from shared.config
+          - fetch_data_pre raises ValueError when shared.fetcher is None
+          - fetch_data_execute wraps a fetcher that raises into
+            ExecResult(records=[], error=<message>), does not propagate the exception
+          - fetch_data_execute wraps a fetcher that returns records into
+            ExecResult(records=<those records>, error=None)
+          - fetch_data_post returns "success" and populates shared.records on a
+            successful ExecResult, and resets attempts to 0
+          - fetch_data_post returns "retry" on a failed ExecResult while
+            shared.attempts stays below 3, and increments attempts each call
+          - fetch_data_post returns "error" once shared.attempts reaches 3 on a
+            failed ExecResult
+        edge: |
+          - fetch_data_execute's ExecResult shape matches pipeline_state's ExecResult
+            dataclass (records: list[dict], error: str | None)
+
+    transform_data:
+      kind: step
+      defines: "Normalize and validate raw records"
+      composed_of: [pipeline_state]
+      tier: 2
+      phases:
+        execute:
+          defines: "Coerce types, drop invalid rows"
+          signature: "(shared: State) -> ExecResult"
+      spec:
+        interface: |
+          from __future__ import annotations
+          from app.schemas import ExecResult, State
+
+          def transform_data_execute(shared: State) -> ExecResult: ...
+        contract: |
+          transform_data_execute(shared):
+            - reads shared.records (the raw records fetch_data populated)
+            - a record is VALID only if it is a dict containing both an "id" key and
+              a "value" key; any other record (missing either key, or not a dict) is
+              dropped silently — not an error, just excluded from the output
+            - for each valid record, coerces "id" to int and "value" to float
+              (via int(...)/float(...)); a record that fails coercion (raises
+              ValueError/TypeError) is also dropped, not propagated as an exception
+            - returns ExecResult(records=<coerced valid records>, error=None) — this
+              step never returns a non-None error; dropping invalid rows is the
+              expected, successful outcome, not a failure
+      verification:
+        node: |
+          - a record missing "id" or "value" is dropped from the output
+          - a record with non-coercible "value" (e.g. "value": "not-a-number") is
+            dropped from the output, without raising
+          - a valid record's "id"/"value" are coerced to int/float respectively in
+            the output
+          - transform_data_execute(shared) with an empty shared.records returns
+            ExecResult(records=[], error=None)
+        edge: |
+          - transform_data_execute's input shape matches the records fetch_data_post
+            leaves in shared.records on the "success" action
+
+    load_data:
+      kind: step
+      defines: "Write transformed records to the warehouse"
+      composed_of: [pipeline_state]
+      tier: 2
+      phases:
+        execute:
+          defines: "Bulk-insert normalized records"
+          signature: "(shared: State) -> ExecResult"
+      spec:
+        interface: |
+          from __future__ import annotations
+          from app.schemas import ExecResult, State
+
+          def load_data_execute(shared: State) -> ExecResult: ...
+        contract: |
+          load_data_execute(shared):
+            - raises ValueError if shared.loader is None (nothing to call)
+            - calls shared.loader(shared.records) once, passing the entire records
+              list in a single call (bulk insert, not one call per record)
+            - on success: returns ExecResult(records=shared.records, error=None)
+            - on any Exception raised by shared.loader(...): catches it and returns
+              ExecResult(records=[], error=str(exception)) — same catch-and-report
+              convention as fetch_data_execute, never propagates
+      verification:
+        node: |
+          - load_data_execute raises ValueError when shared.loader is None
+          - load_data_execute calls shared.loader exactly once with the full
+            shared.records list (not once per record)
+          - a loader that raises produces ExecResult(records=[], error=<message>)
+            without propagating the exception
+          - a loader that succeeds produces ExecResult(records=shared.records,
+            error=None)
+        edge: |
+          - load_data_execute's input (shared.records) matches the coerced record
+            shape transform_data_execute produces
+
+    error_handler:
+      kind: step
+      defines: "Log the failure and halt the pipeline"
+      composed_of: [pipeline_state]
+      tier: 2
+      phases:
+        execute:
+          defines: "Write failure details to the error log"
+          signature: "(shared: State) -> ExecResult"
+      spec:
+        interface: |
+          from __future__ import annotations
+          from app.schemas import ExecResult, State
+
+          def error_handler_execute(shared: State) -> ExecResult: ...
+        contract: |
+          error_handler_execute(shared):
+            - appends a single formatted string to shared.error_log, of the form
+              f"attempt {shared.attempts}: {shared.error}" (using shared.attempts and
+              shared.error exactly as fetch_data_post last left them)
+            - does NOT clear shared.error or shared.attempts — this step only records
+              the failure, it does not reset pipeline state (there is no retry after
+              error_handler; the pipeline halts here per the graph's transitions)
+            - returns ExecResult(records=[], error=shared.error) — propagates the
+              same error message outward rather than swallowing it, so a caller
+              inspecting the final ExecResult can see what failed
+      verification:
+        node: |
+          - calling error_handler_execute appends exactly one entry to
+            shared.error_log, formatted as f"attempt {attempts}: {error}"
+          - shared.attempts and shared.error are unchanged after the call
+          - the returned ExecResult.error equals shared.error, and its records list
+            is empty
+
+    readme:
+      kind: doc
+      defines: "README.md: what this pipeline does, how to install it, and its step API"
+      composed_of: [fetch_data, transform_data, load_data, error_handler]
+      tier: 3
+      spec:
+        interface: |
+          Output: README.md at the component root (NOT under app/) — plain Markdown, not
+          code. Do NOT follow the Python code-style conventions above for this file; this
+          is prose documentation.
+          CRITICAL: output ONLY the Markdown document itself — no preamble narration, no
+          tool-call syntax, no commentary before or after the document.
+        contract: |
+          Must include, as Markdown sections:
+          - Title + one-paragraph description of what this pipeline does (fetch ->
+            transform -> load, bounded retry on fetch, error-handling branch)
+          - Prerequisites: Python version, how to install dependencies (pip install -r
+            requirements.txt)
+          - Usage: a short code example constructing a State with a fetcher/loader
+            injected, then calling fetch_data_pre -> fetch_data_execute ->
+            fetch_data_post, following the "success" branch through transform_data and
+            load_data
+          - Running tests: exact command (pytest tests/)
+          - API summary: one line per step function (fetch_data_pre/execute/post,
+            transform_data_execute, load_data_execute, error_handler_execute)
+        content_outline: |
+          # <Component name>
+          One paragraph description.
+          ## Prerequisites
+          ## Usage
+          ## Running tests
+          ## API
+      verification:
+        node: |
+          - README.md exists at component root
+          - contains headings for prerequisites, usage, running tests, and API
+      docs: |
+        - Generated last, same convention as apps/jwt_provider/'s readme
+
+function:
+  transitions:
+    - from: fetch_data
+      to: transform_data
+      action: success
+    - from: fetch_data
+      to: fetch_data
+      action: retry
+      condition: "attempts < 3"
+      comment: |
+        Bounded retry loop — cycles are expected in flow_graph, unlike
+        form_graph, which must stay acyclic.
+    - from: fetch_data
+      to: error_handler
+      action: error
+      kind: exception
+      comment: |
+        Schema v2.3 (docs/DEV/BUILD/blueprint-schema-v2.2.md §7.2) — marks this
+        as a fault-recovery edge distinct from the normal-path fetch->transform
+        transition, so tooling can filter exception routes from happy-path
+        reachability.
+    - from: transform_data
+      to: load_data
+      action: default
+
+verification:
+  - node: pipeline_state
+    backend: pytest
+    tests: tests/test_schemas.py
+  - node: fetch_data
+    backend: pytest
+    tests: tests/test_fetch_data.py
+  - node: transform_data
+    backend: pytest
+    tests: tests/test_transform_data.py
+  - node: load_data
+    backend: pytest
+    tests: tests/test_load_data.py
+  - node: error_handler
+    backend: pytest
+    tests: tests/test_error_handler.py

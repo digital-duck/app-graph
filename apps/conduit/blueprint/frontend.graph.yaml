@@ -1,0 +1,794 @@
+# ── Unified Duality Graph Schema v2.1 — Software Profile ────────────────────
+# Migrated from graph-driven-workflow/apps/SPL/conduit/components/frontend/graph.yaml
+# (v1 primitives/concepts/tier schema -> form.primitives/form.nodes).
+domain: software/frontend/vue
+target_languages: [typescript]
+comment: |
+  Vue 3 / TypeScript frontend: auth (login/register), article feed with tag
+  filter and pagination, article detail with inline comments, article
+  create/edit form, follow-based personal feed. Largest ported frontend so
+  far — 9 nodes including a stateful root (ConduitApp) that composes 4 other
+  stateful/presentational components plus an auth store.
+capstone: ConduitApp
+
+tech_profile: vue_typescript
+port: ${{ settings.FRONTEND_VITE_PORT }}
+
+# Source of truth for id/version/domain_type — see
+# docs/DEV/BUILD/refactoring-plan-v1.md §1.1.
+blueprint:
+  id: conduit_frontend
+  schema_version: "2.2"
+  graph_schema_version: "2.1"
+  domain_type: software
+  provenance: authored
+  parent_blueprint: null
+  lineage: []
+
+form:
+  primitives:
+    vuejs:
+      defines: |
+        - Vue 3: reactive component system, Composition API, directives
+      tier: 0
+      kind: config
+    typescript:
+      defines: |
+        - TypeScript: static types, interfaces, generics
+      tier: 0
+      kind: config
+    vite:
+      defines: |
+        - Vite: dev server, HMR, module bundler
+      tier: 0
+      kind: config
+  nodes:
+    api_client:
+      kind: concept
+      defines: |
+        - TypeScript fetch wrappers for all conduit backend endpoints
+        - injects auth token
+      composed_of: [typescript]
+      tier: 1
+      spec:
+        interface: |
+          // src/api.ts
+          import { BACKEND_FASTAPI_PORT } from './config'
+          export const BASE_URL = `http://localhost:${BACKEND_FASTAPI_PORT}`
+
+          // ── Types ──────────────────────────────────────────────────────────
+          export interface UserResponse {
+            username: string; email: string; bio: string; image: string | null; token: string
+          }
+          export interface ProfileResponse {
+            username: string; bio: string; image: string | null; following: boolean
+          }
+          export interface ArticleResponse {
+            slug: string; title: string; description: string; body: string
+            tagList: string[]; createdAt: string; updatedAt: string
+            favorited: boolean; favoritesCount: number; author: ProfileResponse
+          }
+          export interface ArticleListResponse {
+            articles: ArticleResponse[]; articlesCount: number
+          }
+          export interface CommentResponse {
+            id: number; body: string; createdAt: string; updatedAt: string
+            author: ProfileResponse
+          }
+          export interface CommentListResponse { comments: CommentResponse[] }
+          export interface TagListResponse { tags: string[] }
+
+          // ── Auth ───────────────────────────────────────────────────────────
+          export async function registerUser(username: string, email: string, password: string): Promise<UserResponse>
+          export async function loginUser(email: string, password: string): Promise<UserResponse>
+          export async function getCurrentUser(token: string): Promise<UserResponse>
+          export async function updateUser(token: string, data: Partial<{email: string; password: string; bio: string; image: string}>): Promise<UserResponse>
+
+          // ── Profiles ───────────────────────────────────────────────────────
+          export async function getProfile(username: string, token?: string): Promise<ProfileResponse>
+          export async function followUser(username: string, token: string): Promise<ProfileResponse>
+          export async function unfollowUser(username: string, token: string): Promise<ProfileResponse>
+
+          // ── Articles ───────────────────────────────────────────────────────
+          export async function getArticles(params?: {
+            tag?: string; author?: string; favorited?: string
+            limit?: number; offset?: number
+          }, token?: string): Promise<ArticleListResponse>
+          export async function getFeed(token: string, params?: {limit?: number; offset?: number}): Promise<ArticleListResponse>
+          export async function getArticle(slug: string, token?: string): Promise<ArticleResponse>
+          export async function createArticle(data: {title: string; description: string; body: string; tagList: string[]}, token: string): Promise<ArticleResponse>
+          export async function updateArticle(slug: string, data: Partial<{title: string; description: string; body: string}>, token: string): Promise<ArticleResponse>
+          export async function deleteArticle(slug: string, token: string): Promise<void>
+
+          // ── Favorites ──────────────────────────────────────────────────────
+          export async function favoriteArticle(slug: string, token: string): Promise<ArticleResponse>
+          export async function unfavoriteArticle(slug: string, token: string): Promise<ArticleResponse>
+
+          // ── Comments ───────────────────────────────────────────────────────
+          export async function getComments(slug: string, token?: string): Promise<CommentListResponse>
+          export async function addComment(slug: string, body: string, token: string): Promise<CommentResponse>
+          export async function deleteComment(slug: string, commentId: number, token: string): Promise<void>
+
+          // ── Tags ───────────────────────────────────────────────────────────
+          export async function getTags(): Promise<TagListResponse>
+        contract: |
+          BASE_URL is built from BACKEND_FASTAPI_PORT imported from ./config (generated from
+          settings.yaml — do NOT hardcode the port number); direct calls, no Vite proxy needed
+          for prototype.
+          Auth token injected via Authorization header: `Authorization: Bearer ${token}`.
+          All functions: if (!response.ok) throw new Error(`HTTP ${response.status}: ${await response.text()}`).
+          POST/PUT requests: Content-Type: application/json; body: JSON.stringify(data).
+          Optional token params: when token is undefined/null, omit the Authorization header entirely.
+          deleteArticle + deleteComment: return Promise<void>; do NOT call response.json() on 204 response.
+          getArticles params: build URLSearchParams only for defined params (skip undefined values).
+          All response types exported for use in components.
+      verification:
+        node: |
+          - all functions exported
+          - all types exported
+          - BASE_URL constant exported
+        edge: |
+          - HTTP methods and paths match backend api_routes
+          - token injection via Authorization header
+          - 204 responses handled without json() call
+      docs: |
+        - Manual fetch wrappers
+        - no auto-generated client
+        - same approach as fullstack api_client
+    auth_store:
+      kind: concept
+      defines: |
+        - useAuth() composable: token from localStorage, currentUser, login/register/logout
+      composed_of: [vuejs, typescript, api_client]
+      tier: 2
+      spec:
+        interface: |
+          // src/auth.ts
+          import { ref, computed } from 'vue'
+          import type { UserResponse } from './api'
+          import { registerUser, loginUser, getCurrentUser } from './api'
+
+          const token = ref<string | null>(localStorage.getItem('conduit_token'))
+          const currentUser = ref<UserResponse | null>(null)
+
+          export function useAuth() {
+            const isLoggedIn = computed(() => !!token.value)
+
+            async function login(email: string, password: string): Promise<void>
+            async function register(username: string, email: string, password: string): Promise<void>
+            async function logout(): Promise<void>
+            async function fetchCurrentUser(): Promise<void>
+
+            return { token, currentUser, isLoggedIn, login, register, logout, fetchCurrentUser }
+          }
+        contract: |
+          token: module-level ref persisted to localStorage key "conduit_token".
+          currentUser: module-level ref; populated by fetchCurrentUser().
+          isLoggedIn: computed(() => !!token.value)
+
+          login(email, password):
+            resp = await loginUser(email, password)
+            token.value = resp.token
+            localStorage.setItem('conduit_token', resp.token)
+            currentUser.value = resp
+
+          register(username, email, password):
+            resp = await registerUser(username, email, password)
+            token.value = resp.token
+            localStorage.setItem('conduit_token', resp.token)
+            currentUser.value = resp
+
+          logout():
+            token.value = null
+            currentUser.value = null
+            localStorage.removeItem('conduit_token')
+
+          fetchCurrentUser():
+            if (!token.value) return
+            try:
+              currentUser.value = await getCurrentUser(token.value)
+            catch:
+              token.value = null; localStorage.removeItem('conduit_token')
+
+          Module-level refs (not inside the function) so state is shared across all useAuth() calls.
+          Export useAuth as a named export.
+      verification:
+        node: |
+          - mock api
+          - login → token set in localStorage + currentUser set
+          - logout → cleared
+          - register → same as login
+          - isLoggedIn false before login
+          - true after
+        edge: |
+          - loginUser called with email+password
+          - registerUser called with username+email+password
+          - token passed to getCurrentUser in fetchCurrentUser
+      docs: |
+        - Same pattern as fullstack auth_store
+        - adds register() and uses 'conduit_token' localStorage key
+    LoginForm:
+      kind: concept
+      defines: |
+        - Combined login/register form with mode toggle
+        - emits loggedIn on success
+      composed_of: [vuejs, typescript, auth_store]
+      tier: 2
+      spec:
+        interface: |
+          // src/components/LoginForm.vue
+          Props: none
+          Emits: loggedIn()
+          State:
+            mode: Ref<'login' | 'register'>    (toggle between forms)
+            email: Ref<string>
+            password: Ref<string>
+            username: Ref<string>              (register only)
+            error: Ref<string>
+        contract: |
+          Template:
+            - Toggle link/button: "Need an account? Register" / "Have an account? Sign in"
+            - In register mode: username, email, password fields
+            - In login mode: email, password fields
+            - Submit button: "Sign in" or "Register"
+            - Error message shown when error.value is non-empty
+
+          On submit:
+            try {
+              if (mode.value === 'login'):
+                await auth.login(email.value, password.value)
+              else:
+                await auth.register(username.value, email.value, password.value)
+              emit('loggedIn')
+            } catch (e) {
+              error.value = e instanceof Error ? e.message : 'Authentication failed'
+            }
+
+          Mode toggle resets error.value = ''.
+          Import useAuth from '../auth'.
+      verification:
+        node: |
+          - mount
+          - renders email + password inputs
+          - mode toggle switches to register (adds username input)
+          - submit login → auth.login called → loggedIn emitted
+          - submit register → auth.register called
+          - failed login → error shown
+          - loggedIn not emitted on error
+        edge: |
+          - auth.login called with email+password
+          - auth.register called with username+email+password
+      docs: |
+        - Combined form
+        - first time GDW has login + register in one component with mode toggle
+    ArticleCard:
+      kind: concept
+      defines: |
+        - Purely presentational article card: title, description, author, tags, favoriteCount
+      composed_of: [vuejs, typescript]
+      tier: 3
+      spec:
+        interface: |
+          // src/components/ArticleCard.vue
+          Props:
+            article: ArticleResponse
+          Emits:
+            click(slug: string)
+            favorite(slug: string)
+          Template:
+            <div>
+              <div>                           <!-- article meta -->
+                <span>{{ article.author.username }}</span>
+                <span>{{ article.createdAt }}</span>
+                <button @click.stop="$emit('favorite', article.slug)">
+                  ♥ {{ article.favoritesCount }}
+                </button>
+              </div>
+              <h2 @click="$emit('click', article.slug)">{{ article.title }}</h2>
+              <p>{{ article.description }}</p>
+              <span v-for="tag in article.tagList" :key="tag">{{ tag }}</span>
+              <button @click="$emit('click', article.slug)">Read more...</button>
+            </div>
+        contract: |
+          No fetch calls — purely presentational.
+          Click on title or "Read more" → emit('click', article.slug).
+          Favorite button → emit('favorite', article.slug); @click.stop to prevent card click.
+          Tags rendered as inline chips; no click handler on individual tags (tag filter is in parent).
+          article.createdAt is an ISO string; display as-is or format with toLocaleDateString().
+          Import ArticleResponse from '../api'.
+      verification:
+        node: |
+          - mount with article prop
+          - title rendered
+          - click title → 'click' emitted with slug
+          - click favorite → 'favorite' emitted
+          - click.stop prevents double emit
+          - tags rendered
+        edge: |
+          - no api calls
+          - emits carry article.slug
+      docs: |
+        - Mirrors Conduit article-preview pattern
+        - new pattern: favorite button inline on card
+    TagSidebar:
+      kind: concept
+      defines: |
+        - Clickable tag list sidebar
+        - emits selectTag when tag is clicked
+      composed_of: [vuejs, typescript]
+      tier: 3
+      spec:
+        interface: |
+          // src/components/TagSidebar.vue
+          Props:
+            tags: string[]
+            selectedTag: string           ('' = no filter)
+          Emits:
+            selectTag(tag: string)        ('' to clear)
+          Template:
+            <div>
+              <h4>Popular Tags</h4>
+              <span v-for="tag in tags" :key="tag"
+                    @click="$emit('selectTag', tag)"
+                    :class="{ active: tag === selectedTag }">
+                {{ tag }}
+              </span>
+              <button v-if="selectedTag" @click="$emit('selectTag', '')">Clear</button>
+            </div>
+        contract: |
+          No fetch calls — receives tags as prop.
+          Click on tag → emit('selectTag', tag).
+          Active tag highlighted (selectedTag prop for comparison).
+          Clear button shown when selectedTag is non-empty; click → emit('selectTag', '').
+          No internal state mutation — fully controlled by parent.
+      verification:
+        node: |
+          - mount with tags=['python','rust'] selectedTag=''
+          - verify tags rendered
+          - click 'python' → selectTag emitted with 'python'
+          - clear button hidden when no selection
+          - clear button shown when selectedTag='python'
+        edge: |
+          - no api calls
+          - parent controls selectedTag via prop
+      docs: |
+        - New component pattern: tag filter sidebar (not a dropdown)
+    ArticleList:
+      kind: concept
+      defines: |
+        - Paginated list of ArticleCards
+        - handles tag/feed mode switching
+      composed_of: [vuejs, typescript, ArticleCard]
+      tier: 3
+      spec:
+        interface: |
+          // src/components/ArticleList.vue
+          Props:
+            articles: ArticleResponse[]
+            articlesCount: number
+            currentPage: number
+            pageSize: number               (default 20)
+          Emits:
+            clickArticle(slug: string)
+            favoriteArticle(slug: string)
+            changePage(page: number)
+          Template:
+            <div v-if="articles.length === 0">No articles here... yet.</div>
+            <ArticleCard
+              v-for="article in articles" :key="article.slug"
+              :article="article"
+              @click="$emit('clickArticle', $event)"
+              @favorite="$emit('favoriteArticle', $event)" />
+            <!-- Pagination: show page buttons if articlesCount > pageSize -->
+            <div v-if="articlesCount > pageSize">
+              <button v-for="p in totalPages" :key="p"
+                      :class="{ active: p === currentPage }"
+                      @click="$emit('changePage', p)">{{ p }}</button>
+            </div>
+        contract: |
+          No fetch calls — receives data as props.
+          totalPages = Math.ceil(articlesCount / pageSize)
+          Pagination buttons only shown when articlesCount > pageSize.
+          Empty state shown when articles.length === 0.
+          Forwards click and favorite events from ArticleCard unchanged.
+          Import ArticleResponse from '../api'; import ArticleCard.
+      verification:
+        node: |
+          - mount with 2 articles
+          - verify cards rendered
+          - click → clickArticle emitted
+          - favorite → favoriteArticle emitted
+          - empty array → empty state
+          - articlesCount=21 pageSize=20 → 2 page buttons
+          - changePage emitted on page click
+        edge: |
+          - no api calls
+          - ArticleCard receives article prop
+          - events forwarded
+      docs: |
+        - List wrapper with pagination
+        - same forwarding pattern as RecipeList in Mealie
+    ArticleDetail:
+      kind: concept
+      defines: |
+        - Stateful full article view: fetches article + comments
+        - inline comment management
+      composed_of: [vuejs, typescript, api_client]
+      tier: 3
+      spec:
+        interface: |
+          // src/components/ArticleDetail.vue
+          Props:
+            slug: string
+            token: string | null           (null = not logged in)
+          Emits:
+            back()
+            edit(slug: string)
+            favorited(slug: string)
+          State:
+            article: Ref<ArticleResponse | null>
+            comments: Ref<CommentResponse[]>
+            newComment: Ref<string>
+        contract: |
+          On mount (onMounted): load article and comments.
+            article.value = await getArticle(slug, token || undefined)
+            const resp = await getComments(slug, token || undefined)
+            comments.value = resp.comments
+
+          Template shows:
+            - article.title, article.body, article.author.username
+            - article.tagList as chips
+            - "Favorite" button → calls favoriteArticle/unfavoriteArticle based on article.favorited
+              then refetches article; emits('favorited', slug)
+            - "Edit" button (shown when token && article.author matches currentUser) → emit('edit', slug)
+            - "Back" button → emit('back')
+            - Comments list: each CommentResponse.body + author.username
+            - If token: textarea for newComment + "Post Comment" button
+              on submit: comment = await addComment(slug, newComment.value, token)
+                comments.value.push(comment); newComment.value = ''
+            - Delete comment button (shown only on own comments):
+                await deleteComment(slug, comment.id, token); refetch comments
+
+          Import getArticle, getComments, addComment, deleteComment,
+                 favoriteArticle, unfavoriteArticle from '../api'.
+          Import ArticleResponse, CommentResponse from '../api'.
+          CRITICAL: the module path is '../api' (src/api.ts, this dependency's own filename)
+            — NOT '../api_client', which is only this dependency's node id in the blueprint
+            graph and never a real file path.
+      verification:
+        node: |
+          - mock api
+          - mount with slug
+          - getArticle called on mount
+          - getComments called on mount
+          - back → 'back' emitted
+          - edit → 'edit' emitted
+          - mock addComment
+          - post comment → addComment called → comment appears in list
+        edge: |
+          - getArticle called with slug
+          - getComments called with slug
+          - addComment called with slug + body + token
+      docs: |
+        - Stateful view
+        - first GDW component with inline sub-entity management (comments)
+    ArticleForm:
+      kind: concept
+      defines: |
+        - Dual-mode form: create or edit article with title, description, body, tagList
+      composed_of: [vuejs, typescript, api_client]
+      tier: 3
+      spec:
+        interface: |
+          // src/components/ArticleForm.vue
+          Props:
+            article: ArticleResponse | null    (null = create mode; ArticleResponse = edit mode)
+            token: string
+          Emits:
+            saved(slug: string)
+            cancelled()
+          State:
+            title: Ref<string>
+            description: Ref<string>
+            body: Ref<string>
+            tagInput: Ref<string>              (current tag input field)
+            tags: Ref<string[]>               (tag list being built)
+            error: Ref<string>
+        contract: |
+          On mount (onMounted):
+            if article prop is not null:
+              title.value = article.title
+              description.value = article.description
+              body.value = article.body
+              tags.value = [...article.tagList]
+
+          "Add tag" button (or Enter on tagInput):
+            if tagInput.value.trim():
+              tags.value.push(tagInput.value.trim()); tagInput.value = ''
+
+          Tag chip × button: removes tag from tags.value list.
+
+          On submit:
+            if (!title.value.trim()) { error.value = 'Title is required'; return }
+            try {
+              if article is null:
+                result = await createArticle({title, description, body, tagList: tags}, token)
+              else:
+                result = await updateArticle(article.slug, {title, description, body}, token)
+              emit('saved', result.slug)
+            } catch (e) {
+              error.value = e instanceof Error ? e.message : 'Failed to save article'
+            }
+
+          Cancel button → emit('cancelled').
+          Import createArticle, updateArticle from '../api'.
+          CRITICAL: the module path is '../api' (src/api.ts, this dependency's own filename)
+            — NOT '../api_client', which is only this dependency's node id in the blueprint
+            graph and never a real file path.
+      verification:
+        node: |
+          - create mode: mock createArticle
+          - fill title/body
+          - submit → createArticle called → saved emitted with slug
+          - edit mode: props populate fields on mount
+          - submit → updateArticle called
+          - empty title → error shown
+          - cancel → cancelled emitted
+        edge: |
+          - createArticle called with {title, description, body, tagList}
+          - updateArticle called with slug + partial data
+          - token passed to both
+      docs: |
+        - Second dual-mode form in GDW (after Mealie RecipeForm)
+        - adds tag chip management
+    ConduitApp:
+      kind: concept
+      defines: |
+        - Stateful root: owns view state, article list, tag list, handles all navigation
+      composed_of: [vuejs, typescript, api_client, auth_store, ArticleList, TagSidebar, ArticleDetail, ArticleForm]
+      tier: 4
+      spec:
+        interface: |
+          // src/components/ConduitApp.vue
+          Props: none
+          State:
+            articles:     Ref<ArticleResponse[]>
+            articlesCount: Ref<number>
+            allTags:      Ref<string[]>
+            selectedTag:  Ref<string>           ('' = no filter)
+            currentPage:  Ref<number>           (1-based)
+            feedMode:     Ref<'global' | 'feed'>
+            view:         Ref<'list' | 'detail' | 'form'>
+            activeSlug:   Ref<string | null>
+            editArticle:  Ref<ArticleResponse | null>
+
+          On mount (onMounted): await loadData().
+
+          loadData():
+            const pageSize = 20
+            const offset = (currentPage.value - 1) * pageSize
+            const token = auth.token.value || undefined
+            if feedMode.value === 'feed' && token:
+              resp = await getFeed(token, { limit: pageSize, offset })
+            else:
+              params = { limit: pageSize, offset }
+              if selectedTag.value: params.tag = selectedTag.value
+              resp = await getArticles(params, token)
+            articles.value = resp.articles
+            articlesCount.value = resp.articlesCount
+            const tagResp = await getTags()
+            allTags.value = tagResp.tags
+
+          watch([selectedTag, currentPage, feedMode], loadData)
+
+          handleClickArticle(slug: string):
+            activeSlug.value = slug; view.value = 'detail'
+
+          handleFavoriteArticle(slug: string):
+            if !auth.token.value: return  // ignore if not logged in
+            article = articles.value.find(a => a.slug === slug)
+            if article.favorited: await unfavoriteArticle(slug, auth.token.value)
+            else: await favoriteArticle(slug, auth.token.value)
+            await loadData()
+
+          handleNewArticle():
+            editArticle.value = null; view.value = 'form'
+
+          handleEditArticle(slug: string):
+            editArticle.value = articles.value.find(a => a.slug === slug) ||
+              await getArticle(slug, auth.token.value)
+            view.value = 'form'
+
+          handleSaved(slug: string):
+            view.value = 'detail'; activeSlug.value = slug; await loadData()
+
+          handleBack(): view.value = 'list'; activeSlug.value = null
+
+          handleTagSelect(tag: string):
+            selectedTag.value = tag; currentPage.value = 1; feedMode.value = 'global'
+
+          handleFeedModeSwitch(mode: 'global' | 'feed'):
+            feedMode.value = mode; selectedTag.value = ''; currentPage.value = 1
+
+          logout():
+            auth.logout(); view.value = 'list'
+
+          Template (simplified):
+            <nav>
+              <button @click="handleFeedModeSwitch('global')">Global Feed</button>
+              <button v-if="auth.isLoggedIn.value" @click="handleFeedModeSwitch('feed')">
+                Your Feed
+              </button>
+              <button v-if="auth.isLoggedIn.value" @click="handleNewArticle">
+                New Article
+              </button>
+              <button v-if="auth.isLoggedIn.value" @click="logout">Logout</button>
+            </nav>
+
+            <div class="layout">
+              <div v-if="view === 'list'">
+                <ArticleList
+                  :articles="articles"
+                  :articlesCount="articlesCount"
+                  :currentPage="currentPage"
+                  :pageSize="20"
+                  @clickArticle="handleClickArticle"
+                  @favoriteArticle="handleFavoriteArticle"
+                  @changePage="p => { currentPage.value = p }" />
+                <TagSidebar
+                  :tags="allTags"
+                  :selectedTag="selectedTag"
+                  @selectTag="handleTagSelect" />
+              </div>
+
+              <ArticleDetail
+                v-if="view === 'detail' && activeSlug"
+                :slug="activeSlug"
+                :token="auth.token.value"
+                @back="handleBack"
+                @edit="handleEditArticle"
+                @favorited="loadData" />
+
+              <ArticleForm
+                v-if="view === 'form'"
+                :article="editArticle"
+                :token="auth.token.value"
+                @saved="handleSaved"
+                @cancelled="handleBack" />
+            </div>
+        contract: |
+          auth = useAuth() — called once at setup; token reactive ref used throughout.
+          loadData called on mount and whenever selectedTag, currentPage, or feedMode changes.
+          Feed mode only available when logged in; switching to feed mode clears selectedTag.
+          Favorite toggle: checks current favorited status then calls appropriate API function.
+          After any mutation (favorite, saved) → reload data to refresh counts.
+          Import all api functions and types from '../api'.
+          Import useAuth from '../auth'.
+      verification:
+        node: |
+          - mock api
+          - mock useAuth
+          - mount
+          - getArticles+getTags called on mount
+          - selectedTag change triggers reload
+          - handleNewArticle switches view to 'form'
+          - handleSaved switches to 'detail'
+          - handleBack → 'list'
+          - feedMode switch calls getFeed when logged in
+        edge: |
+          - ArticleList receives articles
+          - TagSidebar receives allTags
+          - ArticleDetail receives activeSlug + token
+          - ArticleForm receives editArticle (null in create mode)
+      docs: |
+        - Stateful root — same pattern as RecipeDashboard+ExpenseDashboard
+        - adds feed/global mode toggle and pagination
+    App_vue:
+      kind: concept
+      defines: |
+        - Root Vue component: shows LoginForm when not logged in, ConduitApp when logged in
+      composed_of: [vuejs, typescript, auth_store, LoginForm, ConduitApp]
+      tier: 5
+      spec:
+        interface: |
+          // src/App.vue
+          <script setup lang="ts">
+          import { onMounted } from 'vue'
+          import { useAuth } from './auth'
+          import LoginForm from './components/LoginForm.vue'
+          import ConduitApp from './components/ConduitApp.vue'
+          const auth = useAuth()
+          onMounted(() => auth.fetchCurrentUser())
+          </script>
+          <template>
+            <LoginForm v-if="!auth.isLoggedIn.value" @loggedIn="() => {}" />
+            <ConduitApp v-else />
+          </template>
+        contract: |
+          On mount: fetchCurrentUser() restores session from localStorage token.
+          auth.isLoggedIn gates which component is shown.
+          LoginForm loggedIn event triggers reactive isLoggedIn → ConduitApp shows automatically.
+          No router; single-page toggle same as fullstack App_vue pattern.
+      verification:
+        node: |
+          - mount App
+          - isLoggedIn=false → LoginForm shown
+          - mock auth.fetchCurrentUser
+          - isLoggedIn=true → ConduitApp shown
+        edge: |
+          - fetchCurrentUser called on mount
+          - LoginForm loggedIn → isLoggedIn flips → ConduitApp shown
+      docs: |
+        - Auth gate pattern from fullstack
+        - same reactive swap
+    main_ts:
+      kind: concept
+      defines: |
+        - Vue application entry point
+      composed_of: [vuejs, typescript, App_vue]
+      tier: 6
+      spec:
+        interface: |
+          - calls createApp(App).mount('#app')
+        contract: |
+          import { createApp } from 'vue'
+          import App from './App.vue'
+          createApp(App).mount('#app')
+      verification:
+        node: |
+          - file imports from 'vue' and './App.vue'
+          - calls createApp
+        edge: |
+          - App exported from App.vue is the component passed to createApp
+      docs: |
+        - Standard Vue 3 entry point — identical across all GDW apps
+    readme:
+      kind: doc
+      defines: |
+        - README.md: setup, run, and test instructions for this frontend
+      composed_of: [main_ts]
+      tier: 7
+      spec:
+        interface: |
+          Output: README.md at the component root (NOT under src/) — plain Markdown, not code.
+          Do NOT follow the Vue/TypeScript code-style conventions above for this file; those
+          apply to source files only. This file is prose documentation.
+        contract: |
+          Must include, as Markdown sections:
+          - Title + one-paragraph description of what this frontend does
+          - Prerequisites: Node.js version, how to install dependencies (npm install)
+          - Running the dev server: exact command (npm run dev) and the default URL/port
+            (http://localhost:5178), and that it expects the backend at http://localhost:8007
+          - Running tests: exact command (npm test)
+          - Component summary: list each component (LoginForm, ArticleCard, TagSidebar,
+            ArticleList, ArticleDetail, ArticleForm, ConduitApp, App) with a one-line
+            description of its role
+          CRITICAL: this frontend covers exactly the Conduit article/auth/profile domain
+          above. Do NOT mention todos, expenses, kanban cards, recipes, or any other
+          resource type from unrelated sibling apps in this same repo's apps/ directory.
+        content_outline: |
+          # <Component name>
+          One paragraph description.
+          ## Prerequisites
+          ## Running the dev server
+          ## Running tests
+          ## Components
+      verification:
+        node: |
+          - README.md exists at component root
+          - contains headings for prerequisites, running the dev server, running tests, and components
+      docs: |
+        - Generated last, after all code nodes, so it can describe the actual generated component set
+        - Not verified against the code (kind: doc nodes skip compile/edge-symbol checks — see
+          spl/tools.py verify_node/verify_edges)
+
+verification:
+  - node: ConduitApp
+    frontend: vitest
+    tests: tests/ConduitApp.spec.ts
+  - node: LoginForm
+    frontend: vitest
+    tests: tests/LoginForm.spec.ts
+  - node: ArticleList
+    frontend: vitest
+    tests: tests/ArticleList.spec.ts

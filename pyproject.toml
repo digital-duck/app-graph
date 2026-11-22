@@ -1,0 +1,74 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "grafcode"                  # the PyPI name ("graph-code" is too similar to an existing project); the Python package is `graph_code`
+version = "0.1.1"
+description = "Graph-driven code and curriculum generation — Unified Duality Graph Schema v2.1"
+readme = "README.md"
+license = {text = "Apache-2.0"}
+requires-python = ">=3.11"             # spl-llm and zinet need 3.11 / 3.10; 3.11 is the common floor
+dependencies = [
+    "networkx>=3.2",
+    "pyyaml>=6.0",
+    "click>=8.1",
+    "ruamel.yaml>=0.18",
+    "spl-llm>=3.0.0",
+    "zinet>=0.2.0",      # the graph algorithms (order, learning path, reducibility) shared with GraphLang and work-graph
+]
+
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+
+[project.urls]
+Homepage = "https://github.com/digital-duck/graph-code"
+Repository = "https://github.com/digital-duck/graph-code"
+Issues = "https://github.com/digital-duck/graph-code/issues"
+Changelog = "https://github.com/digital-duck/graph-code/blob/main/CHANGELOG.md"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4",
+    "pytest-cov>=4.0",
+]
+ide = [
+    "fastapi",
+    "uvicorn",
+]
+
+[project.scripts]
+grafcode = "graph_code.cli:main"
+gfc = "graph_code.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+# Bundled so `grafcode extract --llm`/`build`/`ide`/`drift --llm` work after a
+# plain `pip install graph-code`, without needing a git checkout of this repo
+# — see _SPL_ROOT/_GRAPH_IDE_ROOT in cli.py, which resolve these paths
+# relative to the installed graph_code package itself.
+# graph-ide/frontend's node_modules/ and dist/ are deliberately excluded (npm
+# install is a separate, documented one-time step for `grafcode ide`).
+graph_code = [
+    "spl/*.spl",
+    "spl/*.py",
+    "graph-ide/api/**/*.py",
+    "graph-ide/frontend/src/**",
+    "graph-ide/frontend/*.json",
+    "graph-ide/frontend/*.js",
+    "graph-ide/frontend/*.html",
+    "graph-ide/README.md",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+norecursedirs = ["fixtures"]   # tests/fixtures holds generated apps with their own test files
+addopts = "-v -p no:spark"

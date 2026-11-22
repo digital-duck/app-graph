@@ -1,0 +1,1856 @@
+--- fief/apps/api/routers/clients.py ---
+import secrets
+
+from fastapi import APIRouter, Depends, HTTPException, Response, status
+
+from fief import schemas
+from fief.crypto.jwk import generate_jwk
+from fief.dependencies.admin_authentication import is_authenticated_admin_api
+from fief.dependencies.client import get_client_by_id_or_404, get_paginated_clients
+from fief.dependencies.logger import get_audit_logger
+from fief.dependencies.pagination import PaginatedObjects
+from fief.dependencies.webhooks import TriggerWebhooks, get_trigger_webhooks
+from fief.errors import APIErrorCode
+from fief.logger import AuditLogger
+from fief.models import AuditLogMessage, Client
+from fief.repositories import ClientRepository, TenantRepository
+from fief.schemas.generics import PaginatedResults
+from fief.services.webhooks.models import ClientCreated, ClientDeleted, ClientUpdated
+
+router = APIRouter(dependencies=[Depends(is_authenticated_admin_api)])
+
+
+@router.get(
+    "/", name="clients:list", response_model=PaginatedResults[schemas.client.Client]
+)
+async def list_clients(
+    paginated_clients: PaginatedObjects[Client] = Depends(get_paginated_clients),
+) -> PaginatedResults[schemas.client.Client]:
+    clients, count = paginated_clients
+    return PaginatedResults(
+        count=count,
+        results=[schemas.client.Client.model_validate(client) for client in clients],
+    )
+
+
+@router.get("/{id:uuid}", name="clients:get", response_model=schemas.client.Client)
+async def get_webhook(client: Client = Depends(get_client_by_id_or_404)) -> Client:
+    return client
+
+
+@router.post(
+    "/",
+    name="clients:create",
+    response_model=schemas.client.Client,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_client(
+    client_create: schemas.client.ClientCreate,
+    repository: ClientRepository = Depends(ClientRepository),
+    tenant_repository: TenantRepository = Depends(TenantRepository),
+    audit_logger: AuditLogger = Depends(get_audit_logger),
+    trigger_webhooks: TriggerWebhooks = Depends(get_trigger_webhooks),
+) -> schemas.client.Client:
+    tenant = await tenant_repository.get_by_id(client_create.tenant_id)
+    if tenant is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=APIErrorCode.CLIENT_CREATE_UNKNOWN_TENANT,
+        )
+
+    client = Client(
+        **client_create.model_dump(exclude={"redirect_uris"}),
+        redirect_uris=[str(u) for u in client_create.redirect_uris],
+    )
+    client = await repository.create(client)
+    audit_logger.log_object_write(AuditLogMessage.OBJECT_CREATED, client)
+    trigger_webhooks(ClientCreated, client, schemas.client.Client)
+
+    return schemas.client.Client.model_validate(client)
+
+
+@router.patch("/{id:uuid}", name="clients:update", response_model=schemas.client.Client)
+async def update_client(
+    client_update: schemas.client.ClientUpdate,
+    client: Client = Depends(get_client_by_id_or_404),
+    repository: ClientRepository = Depends(ClientRepository),
+    audit_logger: AuditLogger = Depends(get_audit_logger),
+    trigger_webhooks: TriggerWebhooks = Depends(get_trigger_webhooks),
+) -> schemas.client.Client:
+    client_update_dict = client_update.model_dump(exclude_unset=True)
+    for field, value in client_update_dict.items():
+        if field == "redirect_uris":
+            value = [str(u) for u in value]
+        setattr(client, field, value)
+
+    await repository.update(client)
+    audit_logger.log_object_write(AuditLogMessage.OBJECT_UPDATED, client)
+    trigger_webhooks(ClientUpdated, client, schemas.client.Client)
+
+    return schemas.client.Client.model_validate(client)
+
+
+@router.post(
+    "/{id:uuid}/encryption-key",
+    name="clients:encryption_key",
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_encryption_key(
+    client: Client = Depends(get_client_by_id_or_404),
+    repository: ClientRepository = Depends(ClientRepository),
+    audit_logger: AuditLogger = Depends(get_audit_logger),
+    trigger_webhooks: TriggerWebhooks = Depends(get_trigger_webhooks),
+):
+
+... (truncated)
+--- fief/apps/api/routers/email_templates.py ---
+import jinja2.exceptions
+from fastapi import APIRouter, Depends, HTTPException, status
+
+from fief import schemas
+from fief.db import AsyncSession
+from fief.dependencies.admin_authentication import is_authenticated_admin_api
+from fief.dependencies.db import get_main_async_session
+from fief.dependencies.email_template import (
+    get_email_template_by_id_or_404,
+    get_paginated_email_templates,
+)
+from fief.dependencies.logger import get_audit_logger
+from fief.dependencies.pagination import PaginatedObjects
+from fief.dependencies.repositories import get_repository
+from fief.dependencies.webhooks import TriggerWebhooks, get_trigger_webhooks
+from fief.errors import APIErrorCode
+from fief.logger import AuditLogger
+from fief.models import AuditLogMessage, EmailTemplate
+from fief.repositories.email_template import EmailTemplateRepository
+from fief.schemas.generics import PaginatedResults
+from fief.services.email_template.contexts import EMAIL_TEMPLATE_CONTEXT_CLASS_MAP
+from fief.services.email_template.renderers import (
+    EmailSubjectRenderer,
+    EmailTemplateRenderer,
+)
+from fief.services.email_template.types import EmailTemplateType
+from fief.services.webhooks.models import EmailTemplateUpdated
+
+router = APIRouter(dependencies=[Depends(is_authenticated_admin_api)])
+
+
+@router.get(
+    "/",
+    name="email_templates:list",
+    response_model=PaginatedResults[schemas.email_template.EmailTemplate],
+)
+async def list_email_templates(
+    paginated_email_templates: PaginatedObjects[EmailTemplate] = Depends(
+        get_paginated_email_templates
+    ),
+) -> PaginatedResults[schemas.email_template.EmailTemplate]:
+    email_templates, count = paginated_email_templates
+    return PaginatedResults(
+        count=count,
+        results=[
+            schemas.email_template.EmailTemplate.model_validate(email_template)
+            for email_template in email_templates
+        ],
+    )
+
+
+@router.get(
+    "/{id:uuid}",
+    name="email_templates:get",
+    response_model=schemas.email_template.EmailTemplate,
+)
+async def get_email_template(
+    email_template: EmailTemplate = Depends(get_email_template_by_id_or_404),
+) -> schemas.email_template.EmailTemplate:
+    return schemas.email_template.EmailTemplate.model_validate(email_template)
+
+
+@router.patch(
+    "/{id:uuid}",
+    name="email_templates:update",
+    response_model=schemas.email_template.EmailTemplate,
+)
+async def update_email_template(
+    email_template_update: schemas.email_template.EmailTemplateUpdate,
+    email_template: EmailTemplate = Depends(get_email_template_by_id_or_404),
+    repository: EmailTemplateRepository = Depends(
+        get_repository(EmailTemplateRepository)
+    ),
+    session: AsyncSession = Depends(get_main_async_session),
+    audit_logger: AuditLogger = Depends(get_audit_logger),
+    trigger_webhooks: TriggerWebhooks = Depends(get_trigger_webhooks),
+) -> schemas.email_template.EmailTemplate:
+    email_template_update_dict = email_template_update.model_dump(exclude_unset=True)
+
+    context_class = EMAIL_TEMPLATE_CONTEXT_CLASS_MAP[email_template.type]
+    sample_context = await context_class.create_sample_context(session)
+
+    email_template_preview = EmailTemplate(
+        type=email_template.type,
+        subject=email_template_update_dict.get("subject", email_template.subject),
+        content=email_template_update_dict.get("content", email_template.content),
+    )
+    email_subject_renderer = EmailSubjectRenderer(
+        repository, templates_overrides={email_template.type: email_template_preview}
+    )
+    email_template_renderer = EmailTemplateRenderer(
+        repository, templates_overrides={email_template.type: email_template_preview}
+    )
+    try:
+        await email_subject_renderer.render(
+            EmailTemplateType[email_template_preview.type], sample_context
+        )  # type: ignore
+        await email_template_renderer.render(
+            EmailTemplateType[email_template_preview.type], sample_context
+        )  # type: ignore
+    except jinja2.
+... (truncated)
+--- fief/apps/api/routers/oauth_providers.py ---
+from datetime import UTC, datetime
+from typing import cast
+
+from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi.exceptions import RequestValidationError
+from httpx_oauth.oauth2 import RefreshTokenError, RefreshTokenNotSupportedError
+from pydantic import UUID4, ValidationError
+
+from fief import schemas
+from fief.dependencies.admin_authentication import is_authenticated_admin_api
+from fief.dependencies.logger import get_audit_logger
+from fief.dependencies.oauth_provider import (
+    get_oauth_provider_by_id_or_404,
+    get_paginated_oauth_providers,
+)
+from fief.dependencies.pagination import PaginatedObjects
+from fief.dependencies.repositories import get_repository
+from fief.dependencies.webhooks import TriggerWebhooks, get_trigger_webhooks
+from fief.errors import APIErrorCode
+from fief.logger import AuditLogger, logger
+from fief.models import AuditLogMessage, OAuthProvider
+from fief.models.oauth_account import OAuthAccount
+from fief.repositories import (
+    OAuthAccountRepository,
+    OAuthProviderRepository,
+    UserRepository,
+)
+from fief.schemas.generics import PaginatedResults
+from fief.services.oauth_provider import get_oauth_provider_service
+from fief.services.webhooks.models import (
+    OAuthProviderCreated,
+    OAuthProviderDeleted,
+    OAuthProviderUpdated,
+)
+
+router = APIRouter(dependencies=[Depends(is_authenticated_admin_api)])
+
+
+@router.get(
+    "/",
+    name="oauth_providers:list",
+    response_model=PaginatedResults[schemas.oauth_provider.OAuthProvider],
+)
+async def list_oauth_providers(
+    paginated_oauth_providers: PaginatedObjects[OAuthProvider] = Depends(
+        get_paginated_oauth_providers
+    ),
+) -> PaginatedResults[schemas.oauth_provider.OAuthProvider]:
+    oauth_providers, count = paginated_oauth_providers
+    return PaginatedResults(
+        count=count,
+        results=[
+            schemas.oauth_provider.OAuthProvider.model_validate(oauth_provider)
+            for oauth_provider in oauth_providers
+        ],
+    )
+
+
+@router.get(
+    "/{id:uuid}",
+    name="oauth_providers:get",
+    response_model=schemas.oauth_provider.OAuthProvider,
+)
+async def get_oauth_provider(
+    oauth_provider: OAuthProvider = Depends(get_oauth_provider_by_id_or_404),
+) -> OAuthProvider:
+    return oauth_provider
+
+
+@router.post(
+    "/",
+    name="oauth_providers:create",
+    response_model=schemas.oauth_provider.OAuthProvider,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_oauth_provider(
+    oauth_provider_create: schemas.oauth_provider.OAuthProviderCreate,
+    repository: OAuthProviderRepository = Depends(
+        get_repository(OAuthProviderRepository)
+    ),
+    audit_logger: AuditLogger = Depends(get_audit_logger),
+    trigger_webhooks: TriggerWebhooks = Depends(get_trigger_webhooks),
+) -> schemas.oauth_provider.OAuthProvider:
+    oauth_provider = OAuthProvider(**oauth_provider_create.model_dump())
+    oauth_provider = await repository.create(oauth_provider)
+    audit_logger.log_object_write(AuditLogMessage.OBJECT_CREATED, oauth_provider)
+    trigger_webhooks(
+        OAuthProviderCreated,
+        oauth_provider,
+        schemas.oauth_provider.OAuthProvider,
+    )
+
+    return schemas.oauth_provider.OAuthProvider.model_validate(oauth_provider)
+
+
+@router.patch(
+    "/{id:uuid}",
+    name="oauth_providers:update",
+    response_model=schemas.oauth_provider.OAuthProvider,
+)
+async def update_oauth_provider(
+    oauth_provider_update: schemas.oauth_provider.OAuthProviderUpdate,
+    oauth_provider: OAuthProvider = Depends(get_oauth_provider_by_id_or_404),
+    repository: OAuthProviderRepository = Depends(
+        get_repository(OAuthProviderRepository)
+    ),
+    audit_logger: AuditLogger = Depends(get_audit_logger),
+    trigger_webhooks: TriggerWebhooks = Depends(get_trigger_webhooks),
+) -> schemas.oauth_provider.OAuthProvider:
+    oauth_provider_update_dict = oauth_provider_update.model_dump(exclude_unset=True)
+
+    try:
+        oauth_provider_update_provider = (
+            sch
+... (truncated)
+--- fief/apps/api/routers/permissions.py ---
+from fastapi import APIRouter, Depends, HTTPException, Response, status
+
+from fief import schemas
+from fief.dependencies.admin_authentication import is_authenticated_admin_api
+from fief.dependencies.logger import get_audit_logger
+from fief.dependencies.pagination import PaginatedObjects
+from fief.dependencies.permission import (
+    get_paginated_permissions,
+    get_permission_by_id_or_404,
+)
+from fief.dependencies.webhooks import TriggerWebhooks, get_trigger_webhooks
+from fief.errors import APIErrorCode
+from fief.logger import AuditLogger
+from fief.models import AuditLogMessage, Permission
+from fief.repositories import PermissionRepository
+from fief.schemas.generics import PaginatedResults
+from fief.services.webhooks.models import (
+    PermissionCreated,
+    PermissionDeleted,
+    PermissionUpdated,
+)
+
+router = APIRouter(dependencies=[Depends(is_authenticated_admin_api)])
+
+
+@router.get(
+    "/",
+    name="permissions:list",
+    response_model=PaginatedResults[schemas.permission.Permission],
+)
+async def list_permissions(
+    paginated_permissions: PaginatedObjects[Permission] = Depends(
+        get_paginated_permissions
+    ),
+) -> PaginatedResults[schemas.permission.Permission]:
+    permissions, count = paginated_permissions
+    return PaginatedResults(
+        count=count,
+        results=[
+            schemas.permission.Permission.model_validate(permission)
+            for permission in permissions
+        ],
+    )
+
+
+@router.get(
+    "/{id:uuid}", name="permissions:get", response_model=schemas.permission.Permission
+)
+async def get_permission(
+    permission: Permission = Depends(get_permission_by_id_or_404),
+) -> Permission:
+    return permission
+
+
+@router.post(
+    "/",
+    name="permissions:create",
+    response_model=schemas.permission.Permission,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_permission(
+    permission_create: schemas.permission.PermissionCreate,
+    repository: PermissionRepository = Depends(PermissionRepository),
+    audit_logger: AuditLogger = Depends(get_audit_logger),
+    trigger_webhooks: TriggerWebhooks = Depends(get_trigger_webhooks),
+) -> schemas.permission.Permission:
+    existing_permission = await repository.get_by_codename(permission_create.codename)
+    if existing_permission is not None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=APIErrorCode.PERMISSION_CREATE_CODENAME_ALREADY_EXISTS,
+        )
+
+    permission = Permission(**permission_create.model_dump())
+    permission = await repository.create(permission)
+    audit_logger.log_object_write(AuditLogMessage.OBJECT_CREATED, permission)
+    trigger_webhooks(PermissionCreated, permission, schemas.permission.Permission)
+
+    return schemas.permission.Permission.model_validate(permission)
+
+
+@router.patch(
+    "/{id:uuid}",
+    name="permissions:update",
+    response_model=schemas.permission.Permission,
+)
+async def update_permission(
+    permission_update: schemas.permission.PermissionUpdate,
+    permission: Permission = Depends(get_permission_by_id_or_404),
+    repository: PermissionRepository = Depends(PermissionRepository),
+    audit_logger: AuditLogger = Depends(get_audit_logger),
+    trigger_webhooks: TriggerWebhooks = Depends(get_trigger_webhooks),
+) -> schemas.permission.Permission:
+    updated_codename = permission_update.codename
+    if updated_codename is not None and updated_codename != permission.codename:
+        existing_permission = await repository.get_by_codename(updated_codename)
+        if existing_permission is not None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=APIErrorCode.PERMISSION_UPDATE_CODENAME_ALREADY_EXISTS,
+            )
+
+    permission_update_dict = permission_update.model_dump(exclude_unset=True)
+    for field, value in permission_update_dict.items():
+        setattr(permission, field, value)
+
+    await repository.update(permission)
+    audit_logger.log_object_write(Audit
+... (truncated)
+--- fief/apps/api/routers/roles.py ---
+from fastapi import APIRouter, Depends, HTTPException, Response, status
+
+from fief import schemas
+from fief.dependencies.admin_authentication import is_authenticated_admin_api
+from fief.dependencies.logger import get_audit_logger
+from fief.dependencies.pagination import PaginatedObjects
+from fief.dependencies.repositories import get_repository
+from fief.dependencies.role import get_paginated_roles, get_role_by_id_or_404
+from fief.dependencies.tasks import get_send_task
+from fief.dependencies.webhooks import TriggerWebhooks, get_trigger_webhooks
+from fief.errors import APIErrorCode
+from fief.logger import AuditLogger
+from fief.models import AuditLogMessage, Role
+from fief.repositories import PermissionRepository, RoleRepository
+from fief.schemas.generics import PaginatedResults
+from fief.services.webhooks.models import RoleCreated, RoleDeleted, RoleUpdated
+from fief.tasks import SendTask, on_role_updated
+
+router = APIRouter(dependencies=[Depends(is_authenticated_admin_api)])
+
+
+@router.get(
+    "/",
+    name="roles:list",
+    response_model=PaginatedResults[schemas.role.Role],
+)
+async def list_roles(
+    paginated_roles: PaginatedObjects[Role] = Depends(get_paginated_roles),
+) -> PaginatedResults[schemas.role.Role]:
+    roles, count = paginated_roles
+    return PaginatedResults(
+        count=count,
+        results=[schemas.role.Role.model_validate(role) for role in roles],
+    )
+
+
+@router.get("/{id:uuid}", name="roles:get", response_model=schemas.role.Role)
+async def get_role(role: Role = Depends(get_role_by_id_or_404)) -> Role:
+    return role
+
+
+@router.post(
+    "/",
+    name="roles:create",
+    response_model=schemas.role.Role,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_role(
+    role_create: schemas.role.RoleCreate,
+    repository: RoleRepository = Depends(RoleRepository),
+    permission_repository: PermissionRepository = Depends(
+        get_repository(PermissionRepository)
+    ),
+    audit_logger: AuditLogger = Depends(get_audit_logger),
+    trigger_webhooks: TriggerWebhooks = Depends(get_trigger_webhooks),
+) -> schemas.role.Role:
+    role = Role(**role_create.model_dump(exclude={"permissions"}))
+
+    for permission_id in role_create.permissions:
+        permission = await permission_repository.get_by_id(permission_id)
+        if permission is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=APIErrorCode.ROLE_CREATE_NOT_EXISTING_PERMISSION,
+            )
+        else:
+            role.permissions.append(permission)
+
+    role = await repository.create(role)
+    audit_logger.log_object_write(AuditLogMessage.OBJECT_CREATED, role)
+    trigger_webhooks(RoleCreated, role, schemas.role.Role)
+
+    return schemas.role.Role.model_validate(role)
+
+
+@router.patch(
+    "/{id:uuid}",
+    name="roles:update",
+    response_model=schemas.role.Role,
+)
+async def update_role(
+    role_update: schemas.role.RoleUpdate,
+    role: Role = Depends(get_role_by_id_or_404),
+    repository: RoleRepository = Depends(RoleRepository),
+    permission_repository: PermissionRepository = Depends(
+        get_repository(PermissionRepository)
+    ),
+    send_task: SendTask = Depends(get_send_task),
+    audit_logger: AuditLogger = Depends(get_audit_logger),
+    trigger_webhooks: TriggerWebhooks = Depends(get_trigger_webhooks),
+) -> schemas.role.Role:
+    role_update_dict = role_update.model_dump(
+        exclude_unset=True, exclude={"permissions"}
+    )
+    for field, value in role_update_dict.items():
+        setattr(role, field, value)
+
+    old_permissions = {permission.id for permission in role.permissions}
+    if role_update.permissions is not None:
+        role.permissions = []
+        for permission_id in role_update.permissions:
+            permission = await permission_repository.get_by_id(permission_id)
+            if permission is None:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=APIErro
+... (truncated)
+--- fief/apps/api/routers/tenants.py ---
+from fastapi import APIRouter, Depends, HTTPException, Response, status
+
+from fief import schemas
+from fief.dependencies.admin_authentication import is_authenticated_admin_api
+from fief.dependencies.logger import get_audit_logger
+from fief.dependencies.pagination import PaginatedObjects
+from fief.dependencies.repositories import get_repository
+from fief.dependencies.tenant import get_paginated_tenants, get_tenant_by_id_or_404
+from fief.dependencies.webhooks import TriggerWebhooks, get_trigger_webhooks
+from fief.errors import APIErrorCode
+from fief.logger import AuditLogger
+from fief.models import AuditLogMessage, Client, OAuthProvider, Tenant
+from fief.repositories import (
+    ClientRepository,
+    OAuthProviderRepository,
+    TenantRepository,
+    ThemeRepository,
+)
+from fief.schemas.generics import PaginatedResults
+from fief.services.webhooks.models import (
+    ClientCreated,
+    TenantCreated,
+    TenantDeleted,
+    TenantUpdated,
+)
+
+router = APIRouter(dependencies=[Depends(is_authenticated_admin_api)])
+
+
+@router.get(
+    "/", name="tenants:list", response_model=PaginatedResults[schemas.tenant.Tenant]
+)
+async def list_tenants(
+    paginated_tenants: PaginatedObjects[Tenant] = Depends(get_paginated_tenants),
+) -> PaginatedResults[schemas.tenant.Tenant]:
+    tenants, count = paginated_tenants
+    return PaginatedResults(
+        count=count,
+        results=[schemas.tenant.Tenant.model_validate(tenant) for tenant in tenants],
+    )
+
+
+@router.get("/{id:uuid}", name="tenants:get", response_model=schemas.tenant.Tenant)
+async def get_tenant(tenant: Tenant = Depends(get_tenant_by_id_or_404)) -> Tenant:
+    return tenant
+
+
+@router.post(
+    "/",
+    name="tenants:create",
+    status_code=status.HTTP_201_CREATED,
+    response_model=schemas.tenant.Tenant,
+)
+async def create_tenant(
+    tenant_create: schemas.tenant.TenantCreate,
+    repository: TenantRepository = Depends(TenantRepository),
+    client_repository: ClientRepository = Depends(ClientRepository),
+    theme_repository: ThemeRepository = Depends(ThemeRepository),
+    oauth_provider_repository: OAuthProviderRepository = Depends(
+        get_repository(OAuthProviderRepository)
+    ),
+    audit_logger: AuditLogger = Depends(get_audit_logger),
+    trigger_webhooks: TriggerWebhooks = Depends(get_trigger_webhooks),
+) -> schemas.tenant.Tenant:
+    if tenant_create.theme_id is not None:
+        theme = await theme_repository.get_by_id(tenant_create.theme_id)
+        if theme is None:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                detail=APIErrorCode.TENANT_CREATE_NOT_EXISTING_THEME,
+            )
+
+    oauth_providers: list[OAuthProvider] = []
+    if tenant_create.oauth_providers is not None:
+        for oauth_provider_id in tenant_create.oauth_providers:
+            oauth_provider = await oauth_provider_repository.get_by_id(
+                oauth_provider_id
+            )
+            if oauth_provider is None:
+                raise HTTPException(
+                    status.HTTP_400_BAD_REQUEST,
+                    detail=APIErrorCode.TENANT_CREATE_NOT_EXISTING_OAUTH_PROVIDER,
+                )
+            oauth_providers.append(oauth_provider)
+
+    slug = await repository.get_available_slug(tenant_create.name)
+    tenant = Tenant(
+        **tenant_create.model_dump(exclude={"oauth_providers"}),
+        slug=slug,
+        oauth_providers=oauth_providers,
+    )
+
+    tenant = await repository.create(tenant)
+    audit_logger.log_object_write(AuditLogMessage.OBJECT_CREATED, tenant)
+    trigger_webhooks(TenantCreated, tenant, schemas.tenant.Tenant)
+
+    client = Client(
+        name=f"{tenant.name}'s client",
+        first_party=True,
+        tenant=tenant,
+        redirect_uris=["http://localhost:8000/docs/oauth2-redirect"],
+    )
+    await client_repository.create(client)
+    audit_logger.log_object_write(AuditLogMessage.OBJECT_CREATED, client)
+    trigger_webhooks(ClientCreated, client, schemas.client.Client)
+
+    return schemas.tenant.T
+... (truncated)
+--- fief/apps/api/routers/user_fields.py ---
+from fastapi import APIRouter, Depends, HTTPException, Response, status
+
+from fief import schemas
+from fief.dependencies.admin_authentication import is_authenticated_admin_api
+from fief.dependencies.logger import get_audit_logger
+from fief.dependencies.pagination import PaginatedObjects
+from fief.dependencies.user_field import (
+    get_paginated_user_fields,
+    get_user_field_by_id_or_404,
+    get_validated_user_field_create,
+    get_validated_user_field_update,
+)
+from fief.dependencies.webhooks import TriggerWebhooks, get_trigger_webhooks
+from fief.errors import APIErrorCode
+from fief.logger import AuditLogger
+from fief.models import AuditLogMessage, UserField
+from fief.repositories import UserFieldRepository
+from fief.schemas.generics import PaginatedResults
+from fief.services.webhooks.models import (
+    UserFieldCreated,
+    UserFieldDeleted,
+    UserFieldUpdated,
+)
+
+router = APIRouter(dependencies=[Depends(is_authenticated_admin_api)])
+
+
+@router.get(
+    "/",
+    name="user_fields:list",
+    response_model=PaginatedResults[schemas.user_field.UserField],
+)
+async def list_user_fields(
+    paginated_user_fields: PaginatedObjects[UserField] = Depends(
+        get_paginated_user_fields
+    ),
+) -> PaginatedResults[schemas.user_field.UserField]:
+    user_fields, count = paginated_user_fields
+    return PaginatedResults(
+        count=count,
+        results=[
+            schemas.user_field.UserField.model_validate(user_field)
+            for user_field in user_fields
+        ],
+    )
+
+
+@router.get(
+    "/{id:uuid}", name="user_fields:get", response_model=schemas.user_field.UserField
+)
+async def get_user_field(
+    user_field: UserField = Depends(get_user_field_by_id_or_404),
+) -> UserField:
+    return user_field
+
+
+@router.post(
+    "/",
+    name="user_fields:create",
+    response_model=schemas.user_field.UserField,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_user_field(
+    user_field_create: schemas.user_field.UserFieldCreate = Depends(
+        get_validated_user_field_create
+    ),
+    repository: UserFieldRepository = Depends(UserFieldRepository),
+    audit_logger: AuditLogger = Depends(get_audit_logger),
+    trigger_webhooks: TriggerWebhooks = Depends(get_trigger_webhooks),
+) -> schemas.user_field.UserField:
+    existing_user_field = await repository.get_by_slug(user_field_create.slug)
+    if existing_user_field is not None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=APIErrorCode.USER_FIELD_SLUG_ALREADY_EXISTS,
+        )
+
+    user_field = UserField(**user_field_create.model_dump())
+    user_field = await repository.create(user_field)
+    audit_logger.log_object_write(AuditLogMessage.OBJECT_CREATED, user_field)
+    trigger_webhooks(UserFieldCreated, user_field, schemas.user_field.UserField)
+
+    return schemas.user_field.UserField.model_validate(user_field)
+
+
+@router.patch(
+    "/{id:uuid}", name="user_fields:update", response_model=schemas.user_field.UserField
+)
+async def update_user_field(
+    user_field_update: schemas.user_field.UserFieldUpdate = Depends(
+        get_validated_user_field_update
+    ),
+    user_field: UserField = Depends(get_user_field_by_id_or_404),
+    repository: UserFieldRepository = Depends(UserFieldRepository),
+    audit_logger: AuditLogger = Depends(get_audit_logger),
+    trigger_webhooks: TriggerWebhooks = Depends(get_trigger_webhooks),
+) -> schemas.user_field.UserField:
+    updated_slug = user_field_update.slug
+    if updated_slug is not None and updated_slug != user_field.slug:
+        existing_user_field = await repository.get_by_slug(updated_slug)
+        if existing_user_field is not None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=APIErrorCode.USER_FIELD_SLUG_ALREADY_EXISTS,
+            )
+
+    user_field_update_dict = user_field_update.model_dump(exclude_unset=True)
+    for field, value in user_field_update_dict.items():
+        setattr(user_field, 
+... (truncated)
+--- fief/apps/api/routers/users.py ---
+from datetime import UTC, datetime
+
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi.responses import JSONResponse
+from pydantic import UUID4
+from sqlalchemy.orm import joinedload
+
+from fief import schemas
+from fief.crypto.access_token import generate_access_token
+from fief.dependencies.admin_authentication import is_authenticated_admin_api
+from fief.dependencies.logger import get_audit_logger
+from fief.dependencies.pagination import PaginatedObjects
+from fief.dependencies.permission import (
+    UserPermissionsGetter,
+    get_user_permissions_getter,
+)
+from fief.dependencies.repositories import get_repository
+from fief.dependencies.user_roles import get_user_roles_service
+from fief.dependencies.users import (
+    get_admin_user_update,
+    get_paginated_user_oauth_accounts,
+    get_paginated_user_permissions,
+    get_paginated_user_roles,
+    get_paginated_users,
+    get_user_by_id_or_404,
+    get_user_create_admin,
+    get_user_manager,
+)
+from fief.dependencies.webhooks import TriggerWebhooks, get_trigger_webhooks
+from fief.errors import APIErrorCode
+from fief.logger import AuditLogger
+from fief.models import (
+    AuditLogMessage,
+    OAuthAccount,
+    User,
+    UserPermission,
+    UserRole,
+)
+from fief.repositories import (
+    ClientRepository,
+    PermissionRepository,
+    RoleRepository,
+    TenantRepository,
+    UserPermissionRepository,
+    UserRepository,
+)
+from fief.schemas.generics import PaginatedResults
+from fief.services.acr import ACR
+from fief.services.user_manager import (
+    InvalidPasswordError,
+    UserAlreadyExistsError,
+    UserManager,
+)
+from fief.services.user_roles import (
+    UserRoleAlreadyExists,
+    UserRoleDoesNotExist,
+    UserRolesService,
+)
+from fief.services.webhooks.models import (
+    UserDeleted,
+    UserPermissionCreated,
+    UserPermissionDeleted,
+)
+
+router = APIRouter(dependencies=[Depends(is_authenticated_admin_api)])
+
+
+@router.get(
+    "/", name="users:list", response_model=PaginatedResults[schemas.user.UserRead]
+)
+async def list_users(
+    paginated_users: PaginatedObjects[User] = Depends(get_paginated_users),
+) -> PaginatedResults[schemas.user.UserRead]:
+    users, count = paginated_users
+    return PaginatedResults(
+        count=count,
+        results=[schemas.user.UserRead.model_validate(user) for user in users],
+    )
+
+
+@router.get("/{id:uuid}", name="users:get", response_model=schemas.user.UserRead)
+async def get_user(
+    user: User = Depends(get_user_by_id_or_404),
+) -> schemas.user.UserRead:
+    return schemas.user.UserRead.model_validate(user)
+
+
+@router.post(
+    "/",
+    name="users:create",
+    response_model=schemas.user.UserRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_user(
+    request: Request,
+    user_create: schemas.user.UserCreateAdmin = Depends(get_user_create_admin),
+    user_manager: UserManager = Depends(get_user_manager),
+    user_repository: UserRepository = Depends(UserRepository),
+    tenant_repository: TenantRepository = Depends(TenantRepository),
+    audit_logger: AuditLogger = Depends(get_audit_logger),
+):
+    tenant = await tenant_repository.get_by_id(user_create.tenant_id)
+    if tenant is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=APIErrorCode.USER_CREATE_UNKNOWN_TENANT,
+        )
+
+    try:
+        created_user = await user_manager.create(
+            user_create, user_create.tenant_id, request=request
+        )
+        audit_logger.log_object_write(AuditLogMessage.OBJECT_CREATED, created_user)
+    except UserAlreadyExistsError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=APIErrorCode.USER_CREATE_ALREADY_EXISTS,
+        ) from e
+    except InvalidPasswordError as e:
+        # Build a JSON response manually to fine-tune the response structure
+        return JSONResponse(
+            content={
+                "detail": APIErrorCode.USER_CREATE_INVALID_PASSWORD,
+ 
+... (truncated)
+--- fief/apps/api/routers/webhooks.py ---
+from fastapi import APIRouter, Depends, Response, status
+
+from fief import schemas
+from fief.dependencies.admin_authentication import is_authenticated_admin_api
+from fief.dependencies.logger import get_audit_logger
+from fief.dependencies.pagination import PaginatedObjects
+from fief.dependencies.webhook import (
+    get_paginated_webhook_logs,
+    get_paginated_webhooks,
+    get_webhook_by_id_or_404,
+)
+from fief.logger import AuditLogger
+from fief.models import AuditLogMessage, Webhook, WebhookLog
+from fief.repositories import WebhookRepository
+from fief.schemas.generics import PaginatedResults
+
+router = APIRouter(dependencies=[Depends(is_authenticated_admin_api)])
+
+
+@router.get(
+    "/", name="webhooks:list", response_model=PaginatedResults[schemas.webhook.Webhook]
+)
+async def list_webhooks(
+    paginated_webhooks: PaginatedObjects[Webhook] = Depends(get_paginated_webhooks),
+) -> PaginatedResults[schemas.webhook.Webhook]:
+    webhooks, count = paginated_webhooks
+    return PaginatedResults(
+        count=count,
+        results=[
+            schemas.webhook.Webhook.model_validate(webhook) for webhook in webhooks
+        ],
+    )
+
+
+@router.post(
+    "/",
+    name="webhooks:create",
+    response_model=schemas.webhook.WebhookSecret,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_webhook(
+    webhook_create: schemas.webhook.WebhookCreate,
+    repository: WebhookRepository = Depends(WebhookRepository),
+    audit_logger: AuditLogger = Depends(get_audit_logger),
+) -> schemas.webhook.WebhookSecret:
+    webhook = Webhook(**webhook_create.model_dump())
+    webhook = await repository.create(webhook)
+    audit_logger.log_object_write(AuditLogMessage.OBJECT_CREATED, webhook)
+
+    return schemas.webhook.WebhookSecret.model_validate(webhook)
+
+
+@router.get("/{id:uuid}", name="webhooks:get", response_model=schemas.webhook.Webhook)
+async def get_webhook(webhook: Webhook = Depends(get_webhook_by_id_or_404)) -> Webhook:
+    return webhook
+
+
+@router.patch(
+    "/{id:uuid}", name="webhooks:update", response_model=schemas.webhook.Webhook
+)
+async def update_webhook(
+    webhook_update: schemas.webhook.WebhookUpdate,
+    webhook: Webhook = Depends(get_webhook_by_id_or_404),
+    repository: WebhookRepository = Depends(WebhookRepository),
+    audit_logger: AuditLogger = Depends(get_audit_logger),
+) -> schemas.webhook.Webhook:
+    webhook_update_dict = webhook_update.model_dump(exclude_unset=True)
+    for field, value in webhook_update_dict.items():
+        setattr(webhook, field, value)
+
+    await repository.update(webhook)
+    audit_logger.log_object_write(AuditLogMessage.OBJECT_UPDATED, webhook)
+
+    return schemas.webhook.Webhook.model_validate(webhook)
+
+
+@router.post(
+    "/{id:uuid}/secret",
+    name="webhooks:secret",
+    response_model=schemas.webhook.WebhookSecret,
+)
+async def regenerate_webhook_secret(
+    webhook: Webhook = Depends(get_webhook_by_id_or_404),
+    repository: WebhookRepository = Depends(WebhookRepository),
+    audit_logger: AuditLogger = Depends(get_audit_logger),
+):
+    webhook.regenerate_secret()
+    await repository.update(webhook)
+    audit_logger.log_object_write(AuditLogMessage.OBJECT_UPDATED, webhook)
+
+    return webhook
+
+
+@router.delete(
+    "/{id:uuid}",
+    name="webhooks:delete",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+)
+async def delete_role(
+    webhook: Webhook = Depends(get_webhook_by_id_or_404),
+    repository: WebhookRepository = Depends(WebhookRepository),
+    audit_logger: AuditLogger = Depends(get_audit_logger),
+):
+    await repository.delete(webhook)
+    audit_logger.log_object_write(AuditLogMessage.OBJECT_DELETED, webhook)
+
+
+@router.get(
+    "/{id:uuid}/logs",
+    name="webhooks:logs",
+    response_model=PaginatedResults[schemas.webhook_log.WebhookLog],
+)
+async def list_webhook_logs(
+    paginated_webhook_logs: PaginatedObjects[WebhookLog] = Depends(
+        get_paginated_webhook_logs
+    ),
+):
+    webhook_logs, count = paginated_webhook_logs
+    return Paginated
+... (truncated)
+--- fief/schemas/auth.py ---
+from typing import Any
+
+from pydantic import BaseModel, Field
+
+
+class AuthorizeError(BaseModel):
+    error: str = Field(..., pattern="invalid_redirect_uri|invalid_client")
+    error_description: Any | None = None
+    error_uri: str | None = None
+
+    @classmethod
+    def get_invalid_redirect_uri(cls, error_description: Any | None = None):
+        return cls(error="invalid_redirect_uri", error_description=error_description)
+
+    @classmethod
+    def get_invalid_client(cls, error_description: Any | None = None):
+        return cls(error="invalid_client", error_description=error_description)
+
+
+class AuthorizeRedirectError(BaseModel):
+    error: str = Field(
+        ...,
+        pattern="invalid_request|unauthorized_client|access_denied|unsupported_response_type|invalid_scope|server_error|temporarily_unavailable|interaction_required|login_required|account_selection_required|consent_required|invalid_request_uri|invalid_request_object|request_not_supported|request_uri_not_supported|registration_not_supported",
+    )
+    error_description: Any | None = None
+    error_uri: str | None = None
+
+    @classmethod
+    def get_invalid_request(cls, error_description: Any | None = None):
+        return cls(error="invalid_request", error_description=error_description)
+
+    @classmethod
+    def get_invalid_scope(cls, error_description: Any | None = None):
+        return cls(error="invalid_scope", error_description=error_description)
+
+    @classmethod
+    def get_login_required(cls, error_description: Any | None = None):
+        return cls(error="login_required", error_description=error_description)
+
+    @classmethod
+    def get_consent_required(cls, error_description: Any | None = None):
+        return cls(error="consent_required", error_description=error_description)
+
+    @classmethod
+    def get_request_not_supported(cls, error_description: Any | None = None):
+        return cls(error="request_not_supported", error_description=error_description)
+
+
+class LoginError(BaseModel):
+    error: str = Field(
+        ..., pattern="missing_session|invalid_session|registration_disabled"
+    )
+    error_description: Any | None = None
+    error_uri: str | None = None
+
+    @classmethod
+    def get_missing_session(cls, error_description: Any | None = None):
+        return cls(error="missing_session", error_description=error_description)
+
+    @classmethod
+    def get_invalid_session(cls, error_description: Any | None = None):
+        return cls(error="invalid_session", error_description=error_description)
+
+    @classmethod
+    def get_registration_disabled(cls, error_description: Any | None = None):
+        return cls(error="registration_disabled", error_description=error_description)
+
+
+class TokenResponse(BaseModel):
+    access_token: str
+    id_token: str
+    token_type: str = Field("bearer", pattern="bearer")
+    expires_in: int
+    refresh_token: str | None = None
+
+
+class TokenError(BaseModel):
+    error: str = Field(
+        ...,
+        pattern="invalid_request|invalid_client|invalid_grant|unauthorized_client|unsupported_grant_type|invalid_scope",
+    )
+    error_description: Any | None = None
+    error_uri: str | None = None
+
+    @classmethod
+    def get_invalid_request(cls):
+        return cls(error="invalid_request")
+
+    @classmethod
+    def get_invalid_client(cls):
+        return cls(error="invalid_client")
+
+    @classmethod
+    def get_invalid_grant(cls):
+        return cls(error="invalid_grant")
+
+    @classmethod
+    def get_unsupported_grant_type(cls):
+        return cls(error="unsupported_grant_type")
+
+    @classmethod
+    def get_invalid_scope(cls):
+        return cls(error="invalid_scope")
+
+
+class LogoutError(BaseModel):
+    error: str = Field(..., pattern="invalid_request")
+    error_description: Any | None = None
+    error_uri: str | None = None
+
+    @classmethod
+    def get_invalid_request(cls, error_description: Any | None = None):
+        return cls(error="invalid_request", error_description=error_description)
+
+--- fief/schemas/client.py ---
+from typing import Annotated
+
+from pydantic import UUID4, AfterValidator, AnyUrl, Field, SecretStr
+from pydantic_core import PydanticCustomError
+
+from fief.errors import APIErrorCode
+from fief.models.client import ClientType
+from fief.schemas.generics import BaseModel, CreatedUpdatedAt, UUIDSchema
+from fief.schemas.tenant import TenantEmbedded
+from fief.services.localhost import is_localhost
+from fief.settings import settings
+
+
+def validate_redirect_uri(url: AnyUrl) -> AnyUrl:
+    if (
+        settings.client_redirect_uri_ssl_required
+        and url.scheme == "http"
+        and (url.host is None or not is_localhost(url.host))
+    ):
+        raise PydanticCustomError(
+            APIErrorCode.CLIENT_HTTPS_REQUIRED_ON_REDIRECT_URIS.value,
+            APIErrorCode.CLIENT_HTTPS_REQUIRED_ON_REDIRECT_URIS.value,
+        )
+    return url
+
+
+RedirectURI = Annotated[AnyUrl, AfterValidator(validate_redirect_uri)]
+
+
+class ClientCreate(BaseModel):
+    name: str
+    first_party: bool
+    client_type: ClientType
+    redirect_uris: list[RedirectURI] = Field(..., min_length=1)
+    authorization_code_lifetime_seconds: int | None = Field(None, ge=0)
+    access_id_token_lifetime_seconds: int | None = Field(None, ge=0)
+    refresh_token_lifetime_seconds: int | None = Field(None, ge=0)
+    tenant_id: UUID4
+
+
+class ClientUpdate(BaseModel):
+    name: str | None = None
+    first_party: bool | None = None
+    client_type: ClientType | None = None
+    redirect_uris: list[RedirectURI] | None = Field(None, min_length=1)
+    authorization_code_lifetime_seconds: int | None = Field(None, ge=0)
+    access_id_token_lifetime_seconds: int | None = Field(None, ge=0)
+    refresh_token_lifetime_seconds: int | None = Field(None, ge=0)
+
+
+class BaseClient(UUIDSchema, CreatedUpdatedAt):
+    name: str
+    first_party: bool
+    client_type: ClientType
+    client_id: str
+    client_secret: str
+    redirect_uris: list[AnyUrl]
+    authorization_code_lifetime_seconds: int
+    access_id_token_lifetime_seconds: int
+    refresh_token_lifetime_seconds: int
+    tenant_id: UUID4
+
+
+class Client(BaseClient):
+    tenant: TenantEmbedded
+    encrypt_jwk: SecretStr | None
+
+--- fief/schemas/email_template.py ---
+from fief.schemas.generics import BaseModel, CreatedUpdatedAt, UUIDSchema
+from fief.services.email_template.types import EmailTemplateType
+
+
+class EmailTemplateUpdate(BaseModel):
+    subject: str | None = None
+    content: str | None = None
+
+
+class EmailTemplateBase(UUIDSchema, CreatedUpdatedAt):
+    type: EmailTemplateType
+    subject: str
+    content: str
+
+
+class EmailTemplate(EmailTemplateBase):
+    pass
+
+--- fief/schemas/generics.py ---
+from datetime import datetime
+from typing import Annotated, Generic, TypeVar
+
+import phonenumbers
+import pycountry
+import pytz
+from pydantic import UUID4, AfterValidator, ConfigDict, Field, StringConstraints
+from pydantic import BaseModel as PydanticBaseModel
+from pydantic_core import PydanticCustomError
+
+
+class BaseModel(PydanticBaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+
+PM = TypeVar("PM", bound=BaseModel)
+
+
+class UUIDSchema(BaseModel):
+    id: UUID4
+
+
+class CreatedUpdatedAt(BaseModel):
+    created_at: datetime
+    updated_at: datetime
+
+
+class PaginatedResults(BaseModel, Generic[PM]):
+    count: int
+    results: list[PM]
+
+
+NonEmptyString = Annotated[str, StringConstraints(min_length=1)]
+
+
+def true_only_boolean(v: bool):
+    if v is False:
+        raise PydanticCustomError("boolean.must_be_true", "value must be true")
+    return v
+
+
+TrueOnlyBoolean = Annotated[bool, AfterValidator(true_only_boolean)]
+
+
+def validate_phone_number(v: str) -> str:
+    try:
+        parsed = phonenumbers.parse(v)
+    except phonenumbers.phonenumberutil.NumberParseException as e:
+        raise PydanticCustomError(
+            "phone_number.missing_region", "value is missing the country code"
+        ) from e
+    if not phonenumbers.is_valid_number(parsed):
+        raise PydanticCustomError(
+            "phone_number.invalid", "value is not a valid phone number"
+        )
+    return phonenumbers.format_number(parsed, phonenumbers.PhoneNumberFormat.E164)
+
+
+PhoneNumber = Annotated[str, AfterValidator(validate_phone_number)]
+
+
+def validate_country_code(v: str) -> str:
+    country = pycountry.countries.get(alpha_2=v)
+    if country is None:
+        raise PydanticCustomError(
+            "country_code.invalid", "value is not a valid country code"
+        )
+    return country.alpha_2
+
+
+class CountryCodeSchema:
+    @classmethod
+    def __get_pydantic_json_schema__(cls, core_schema, handler):
+        countries = sorted(pycountry.countries, key=lambda c: c.name)
+        field_schema = handler(core_schema)
+        field_schema.update(
+            enum=[country.alpha_2 for country in countries],
+        )
+        return field_schema
+
+
+CountryCode = Annotated[str, CountryCodeSchema, AfterValidator(validate_country_code)]
+
+
+class Address(BaseModel):
+    line1: str = Field(..., min_length=1)
+    line2: str | None = Field(None, min_length=1)
+    postal_code: str = Field(..., min_length=1)
+    city: str = Field(..., min_length=1)
+    state: str | None = Field(None, min_length=1)
+    country: CountryCode
+
+
+def validate_timezone(v: str) -> str:
+    try:
+        timezone = pytz.timezone(v)
+    except pytz.exceptions.UnknownTimeZoneError as e:
+        raise PydanticCustomError(
+            "timezone.invalid", "value is not a valid timezone"
+        ) from e
+    else:
+        return str(timezone)
+
+
+class TimezoneSchema:
+    @classmethod
+    def __get_pydantic_json_schema__(cls, core_schema, handler):
+        field_schema = handler(core_schema)
+        field_schema.update(enum=sorted(pytz.common_timezones), title="timezone")
+        return field_schema
+
+
+Timezone = Annotated[str, TimezoneSchema, AfterValidator(validate_timezone)]
+
+--- fief/schemas/oauth.py ---
+from typing import Any
+
+from pydantic import BaseModel
+from pydantic.fields import Field
+
+
+class OAuthError(BaseModel):
+    error: str = Field(
+        ...,
+        pattern="invalid_tenant|invalid_provider|oauth_error|invalid_session|missing_code|access_token_error|id_email_error|inactive_user|user_already_exists",
+    )
+    error_description: Any | None = None
+    error_uri: str | None = None
+
+    @classmethod
+    def get_invalid_tenant(cls, error_description: Any | None = None):
+        return cls(error="invalid_tenant", error_description=error_description)
+
+    @classmethod
+    def get_invalid_provider(cls, error_description: Any | None = None):
+        return cls(error="invalid_provider", error_description=error_description)
+
+    @classmethod
+    def get_oauth_error(cls, error_description: Any | None = None):
+        return cls(error="oauth_error", error_description=error_description)
+
+    @classmethod
+    def get_invalid_session(cls, error_description: Any | None = None):
+        return cls(error="invalid_session", error_description=error_description)
+
+    @classmethod
+    def get_missing_code(cls, error_description: Any | None = None):
+        return cls(error="missing_code", error_description=error_description)
+
+    @classmethod
+    def get_access_token_error(cls, error_description: Any | None = None):
+        return cls(error="access_token_error", error_description=error_description)
+
+    @classmethod
+    def get_id_email_error(cls, error_description: Any | None = None):
+        return cls(error="id_email_error", error_description=error_description)
+
+    @classmethod
+    def get_inactive_user(cls, error_description: Any | None = None):
+        return cls(error="inactive_user", error_description=error_description)
+
+    @classmethod
+    def get_user_already_exists(cls, error_description: Any | None = None):
+        return cls(error="user_already_exists", error_description=error_description)
+
+--- fief/schemas/oauth_provider.py ---
+from pydantic import HttpUrl, SecretStr, model_validator
+from pydantic_core import PydanticCustomError
+
+from fief.errors import APIErrorCode
+from fief.schemas.generics import BaseModel, CreatedUpdatedAt, UUIDSchema
+from fief.services.oauth_provider import AvailableOAuthProvider
+
+
+def validate_openid_provider(oauth_provider: "OAuthProviderCreate"):
+    provider: AvailableOAuthProvider = oauth_provider.provider
+    if provider == AvailableOAuthProvider.OPENID:
+        openid_configuration_endpoint = oauth_provider.openid_configuration_endpoint
+        if openid_configuration_endpoint is None:
+            raise PydanticCustomError(
+                APIErrorCode.OAUTH_PROVIDER_MISSING_OPENID_CONFIGURATION_ENDPOINT.value,
+                APIErrorCode.OAUTH_PROVIDER_MISSING_OPENID_CONFIGURATION_ENDPOINT.value,
+            )
+    return oauth_provider
+
+
+class OAuthProviderCreate(BaseModel):
+    provider: AvailableOAuthProvider
+    client_id: str
+    client_secret: str
+    scopes: list[str]
+    name: str | None = None
+    openid_configuration_endpoint: HttpUrl | None = None
+
+    _validate_openid_provider = model_validator(mode="after")(validate_openid_provider)
+
+
+class OAuthProviderUpdate(BaseModel):
+    client_id: str | None = None
+    client_secret: str | None = None
+    scopes: list[str] | None = None
+    name: str | None = None
+    openid_configuration_endpoint: HttpUrl | None = None
+
+
+class OAuthProviderUpdateProvider(OAuthProviderUpdate):
+    provider: AvailableOAuthProvider
+
+    _validate_openid_provider = model_validator(mode="after")(validate_openid_provider)
+
+
+class BaseOAuthProvider(UUIDSchema, CreatedUpdatedAt):
+    provider: AvailableOAuthProvider
+    client_id: SecretStr
+    client_secret: SecretStr
+    scopes: list[str]
+    name: str | None = None
+    openid_configuration_endpoint: HttpUrl | None = None
+
+
+class OAuthProvider(BaseOAuthProvider):
+    pass
+
+
+class OAuthProviderEmbedded(BaseOAuthProvider):
+    pass
+
+--- fief/schemas/permission.py ---
+from pydantic import BaseModel
+
+from fief.schemas.generics import CreatedUpdatedAt, UUIDSchema
+
+
+class PermissionCreate(BaseModel):
+    name: str
+    codename: str
+
+
+class PermissionUpdate(BaseModel):
+    name: str | None = None
+    codename: str | None = None
+
+
+class BasePermission(UUIDSchema, CreatedUpdatedAt):
+    name: str
+    codename: str
+
+
+class Permission(BasePermission):
+    pass
+
+
+class PermissionEmbedded(BasePermission):
+    pass
+
+--- fief/schemas/role.py ---
+from pydantic import UUID4
+
+from fief.schemas.generics import BaseModel, CreatedUpdatedAt, UUIDSchema
+from fief.schemas.permission import PermissionEmbedded
+
+
+class RoleCreate(BaseModel):
+    name: str
+    granted_by_default: bool
+    permissions: list[UUID4]
+
+
+class RoleUpdate(BaseModel):
+    name: str | None = None
+    granted_by_default: bool | None = None
+    permissions: list[UUID4] | None = None
+
+
+class BaseRole(UUIDSchema, CreatedUpdatedAt):
+    name: str
+    granted_by_default: bool
+
+
+class Role(BaseRole):
+    permissions: list[PermissionEmbedded]
+
+
+class RoleEmbedded(BaseRole):
+    pass
+
+--- fief/schemas/tenant.py ---
+from pydantic import UUID4, HttpUrl
+
+from fief.schemas.generics import BaseModel, CreatedUpdatedAt, UUIDSchema
+from fief.schemas.oauth_provider import OAuthProviderEmbedded
+
+
+class TenantCreate(BaseModel):
+    name: str
+    registration_allowed: bool = True
+    theme_id: UUID4 | None = None
+    logo_url: HttpUrl | None = None
+    application_url: HttpUrl | None = None
+    oauth_providers: list[UUID4] | None = None
+
+
+class TenantUpdate(BaseModel):
+    name: str | None = None
+    registration_allowed: bool | None = None
+    theme_id: UUID4 | None = None
+    logo_url: HttpUrl | None = None
+    application_url: HttpUrl | None = None
+    oauth_providers: list[UUID4] | None = None
+
+
+class BaseTenant(UUIDSchema, CreatedUpdatedAt):
+    name: str
+    default: bool
+    slug: str
+    registration_allowed: bool
+    theme_id: UUID4 | None = None
+    logo_url: HttpUrl | None = None
+    application_url: HttpUrl | None = None
+
+
+class Tenant(BaseTenant):
+    oauth_providers: list[OAuthProviderEmbedded]
+
+
+class TenantEmbedded(BaseTenant):
+    pass
+
+
+class TenantEmailContext(BaseTenant):
+    pass
+
+--- fief/schemas/user.py ---
+import uuid
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING, Any, Generic, TypeVar
+
+from pydantic import UUID4, ConfigDict, EmailStr, Field, SecretStr
+
+from fief.schemas.generics import BaseModel, CreatedUpdatedAt
+from fief.schemas.tenant import TenantEmbedded
+
+if TYPE_CHECKING:  # pragma: no cover
+    from fief.models.tenant import Tenant
+
+
+class UserRead(CreatedUpdatedAt):
+    id: UUID4
+    email: EmailStr
+    email_verified: bool
+    is_active: bool
+
+    tenant_id: UUID4
+    tenant: TenantEmbedded
+    fields: dict[str, Any]
+    model_config = ConfigDict(from_attributes=True)
+
+
+class UserFields(BaseModel):
+    def get_value(self, field: str) -> Any:
+        value = getattr(self, field)
+        if isinstance(value, BaseModel):
+            return value.model_dump()
+        return value
+
+
+UF = TypeVar("UF", bound=UserFields)
+
+
+class UserCreate(BaseModel, Generic[UF]):
+    email: EmailStr
+    password: str
+    fields: UF = Field(default_factory=dict, exclude=True)  # type: ignore
+
+
+class UserCreateAdmin(UserCreate[UF], Generic[UF]):
+    """
+    Model allowing an admin to create a user, from dashboard or API.
+
+    In this context, we need to set the `tenant_id` and `email_verified` manually.
+    """
+
+    email_verified: bool
+    tenant_id: UUID4
+
+
+class UserChangeEmail(BaseModel):
+    email: EmailStr
+
+
+class UserVerifyEmail(BaseModel):
+    code: SecretStr
+
+
+class UserChangePassword(BaseModel):
+    password: SecretStr
+
+
+class UserUpdate(BaseModel, Generic[UF]):
+    fields: UF | None = Field(None, exclude=True)
+
+
+class UserUpdateAdmin(UserUpdate[UF], Generic[UF]):
+    email: EmailStr | None = None
+    email_verified: bool | None = None
+    password: str | None = None
+
+
+class CreateAccessToken(BaseModel):
+    client_id: UUID4
+    scopes: list[str]
+
+
+class AccessTokenResponse(BaseModel):
+    access_token: str
+    token_type: str = Field("bearer", pattern="bearer")
+    expires_in: int
+
+
+class UserEmailContext(CreatedUpdatedAt):
+    id: UUID4
+    email: EmailStr
+    tenant_id: UUID4
+    fields: dict[str, Any]
+    model_config = ConfigDict(from_attributes=True)
+
+    @classmethod
+    def create_sample(cls, tenant: "Tenant") -> "UserEmailContext":
+        return cls(
+            id=uuid.uuid4(),
+            email="anne@bretagne.duchy",
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
+            tenant_id=tenant.id,
+            fields={
+                "first_name": "Anne",
+                "last_name": "De Bretagne",
+            },
+        )
+
+--- fief/schemas/user_field.py ---
+from collections.abc import Mapping
+from datetime import date, datetime
+from enum import Enum
+from typing import Any, Generic, TypeVar
+
+from pydantic import BaseModel, StrictBool, StrictInt, StrictStr
+
+from fief.models import UserField as UserFieldModel
+from fief.models import UserFieldType
+from fief.schemas.generics import (
+    Address,
+    CreatedUpdatedAt,
+    NonEmptyString,
+    PhoneNumber,
+    Timezone,
+    UUIDSchema,
+)
+
+USER_FIELD_TYPE_MAP: Mapping[UserFieldType, type[Any]] = {
+    UserFieldType.STRING: NonEmptyString,
+    UserFieldType.INTEGER: int,
+    UserFieldType.BOOLEAN: bool,
+    UserFieldType.DATE: date,
+    UserFieldType.DATETIME: datetime,
+    UserFieldType.CHOICE: str,
+    UserFieldType.PHONE_NUMBER: PhoneNumber,
+    UserFieldType.ADDRESS: Address,
+    UserFieldType.TIMEZONE: Timezone,
+}
+
+USER_FIELD_CAN_HAVE_DEFAULT: Mapping[UserFieldType, bool] = {
+    UserFieldType.STRING: True,
+    UserFieldType.INTEGER: True,
+    UserFieldType.BOOLEAN: True,
+    UserFieldType.DATE: False,
+    UserFieldType.DATETIME: False,
+    UserFieldType.CHOICE: True,
+    UserFieldType.PHONE_NUMBER: False,
+    UserFieldType.ADDRESS: False,
+    UserFieldType.TIMEZONE: True,
+}
+
+D = TypeVar("D", Timezone, bool, int, str)
+UFT = TypeVar("UFT", bound=UserFieldType)
+
+
+def get_user_field_pydantic_type(field: UserFieldModel) -> type[Any]:
+    if field.type == UserFieldType.CHOICE:
+        choices = (
+            field.configuration["choices"] if field.configuration["choices"] else []
+        )
+        return Enum(  # type: ignore
+            f"{field.slug.capitalize()}Enum",
+            [(value, value) for (value, _) in choices],
+            type=str,
+        )
+
+    return USER_FIELD_TYPE_MAP[field.type]
+
+
+class UserFieldConfigurationBase(BaseModel):
+    at_registration: bool
+    required: bool
+    at_update: bool
+
+
+ChoiceTupleType = tuple[str, str]
+
+
+class UserFieldConfiguration(UserFieldConfigurationBase):
+    choices: list[ChoiceTupleType] | None = None
+    default: Timezone | StrictBool | StrictInt | StrictStr | None = None
+
+
+class UserFieldConfigurationDefault(UserFieldConfigurationBase, Generic[D]):
+    default: D | None = None
+
+
+class UserFieldConfigurationChoice(UserFieldConfigurationDefault[str]):
+    choices: list[ChoiceTupleType] | None = None
+
+
+class UserFieldCreate(BaseModel):
+    name: str
+    slug: str
+    type: UserFieldType
+    configuration: UserFieldConfiguration
+
+
+class UserFieldUpdate(BaseModel):
+    name: str | None = None
+    slug: str | None = None
+    configuration: UserFieldConfiguration | None = None
+
+
+class BaseUserField(UUIDSchema, CreatedUpdatedAt):
+    name: str
+    slug: str
+    type: UserFieldType
+    configuration: UserFieldConfiguration
+
+
+class UserField(BaseUserField):
+    pass
+
+--- fief/schemas/user_permission.py ---
+from pydantic import UUID4
+
+from fief.schemas.generics import BaseModel, CreatedUpdatedAt
+from fief.schemas.permission import PermissionEmbedded
+from fief.schemas.role import RoleEmbedded
+
+
+class UserPermissionCreate(BaseModel):
+    id: UUID4
+
+
+class BaseUserPermission(CreatedUpdatedAt):
+    user_id: UUID4
+    permission_id: UUID4
+    from_role_id: UUID4 | None = None
+
+
+class UserPermission(BaseUserPermission):
+    permission: PermissionEmbedded
+    from_role: RoleEmbedded | None
+
+--- fief/schemas/user_role.py ---
+from pydantic import UUID4
+
+from fief.schemas.generics import BaseModel, CreatedUpdatedAt
+from fief.schemas.role import RoleEmbedded
+
+
+class UserRoleCreate(BaseModel):
+    id: UUID4
+
+
+class BaseUserRole(CreatedUpdatedAt):
+    user_id: UUID4
+    role_id: UUID4
+
+
+class UserRole(BaseUserRole):
+    role: RoleEmbedded
+
+--- fief/schemas/webhook.py ---
+from enum import StrEnum
+
+from pydantic import BaseModel, HttpUrl
+
+from fief.schemas.generics import CreatedUpdatedAt, UUIDSchema
+from fief.services.webhooks.models import WEBHOOK_EVENTS
+
+WebhookEventType = StrEnum(  # type: ignore
+    "WebhookEventType",
+    [event.key() for event in WEBHOOK_EVENTS],
+)
+
+
+class WebhookCreate(BaseModel):
+    url: HttpUrl
+    events: list[WebhookEventType]
+
+
+class WebhookUpdate(BaseModel):
+    url: HttpUrl | None = None
+    events: list[WebhookEventType] | None = None
+
+
+class BaseWebhook(UUIDSchema, CreatedUpdatedAt):
+    url: HttpUrl
+    events: list[WebhookEventType]
+
+
+class Webhook(BaseWebhook):
+    pass
+
+
+class WebhookSecret(BaseWebhook):
+    secret: str
+
+--- fief/schemas/well_known.py ---
+from fief.schemas.generics import BaseModel
+
+
+class OAuth2AuthorizationServerMetadata(BaseModel):
+    """
+    OAuth 2.0 Authorization Server Metadata
+
+    Conforms to RFC8414.
+    https://datatracker.ietf.org/doc/html/rfc8414
+    """
+
+    issuer: str
+    authorization_endpoint: str
+    token_endpoint: str
+    jwks_uri: str
+    registration_endpoint: str
+    scopes_supported: list[str]
+    response_types_supported: list[str]
+    response_modes

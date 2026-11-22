@@ -1,0 +1,62 @@
+# ── ConceptBook v1.0 flat format (backward-compatible) ──────────────────────
+# Loaded by v2.1 loader and internally normalized to unified structure.
+
+domain: classical_mechanics
+
+primitives:
+  position:
+    symbol: x
+    defines: "first radical — configuration; where things are"
+    tier: 0
+  time:
+    symbol: t
+    defines: "first radical — the parameter motion unfolds in"
+    tier: 0
+  mass:
+    symbol: m
+    defines: "second radical — inertia; resistance to changes in motion"
+    tier: 0
+  force:
+    symbol: F
+    defines: "second radical — interaction; what changes states of motion"
+    tier: 0
+
+first_radical_primitives: [position, time]
+
+concepts:
+  velocity:
+    composed_of: [position, time]
+    defines: "rate of change of position — v = dx/dt"
+    verifier: sympy
+    lab: sympy.diff
+    play: "differentiate x(t) = t**2; compare v(t) against the difference quotient"
+    tier: 1
+  acceleration:
+    composed_of: [velocity, time]
+    defines: "rate of change of velocity — a = dv/dt"
+    verifier: sympy
+    tier: 2
+  momentum:
+    composed_of: [mass, velocity]
+    defines: "p = m·v — the conserved currency of motion"
+    verifier: sage|sympy
+    lab: "graph_lib.verify_momentum_conservation"
+    tier: 2
+  newtons_second_law:
+    composed_of: [force, mass, acceleration]
+    defines: "F = m·a — the equation of motion"
+    verifier: sympy
+    tier: 3
+  normal_modes:
+    composed_of: [newtons_second_law, momentum]
+    defines: "the natural oscillation frequencies of a coupled system"
+    verifier: sympy
+    tier: 4
+
+applications:
+  orbital_mechanics:
+    uses: [normal_modes, newtons_second_law]
+    defines: "Predict planetary orbits using equations of motion"
+  robotics:
+    uses: [newtons_second_law, momentum]
+    defines: "Design robotic arms using constrained dynamics"

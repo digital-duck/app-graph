@@ -1,0 +1,455 @@
+# ── Unified Duality Graph Schema v2.1 — Software Profile ────────────────────
+# Migrated from graph-driven-workflow/apps/SPL/kanban/components/frontend/graph.yaml
+domain: software/frontend/vue
+target_languages: [typescript]
+comment: |
+  Vue 3 / TypeScript frontend: API client, card form, card, status select,
+  column, board.
+capstone: KanbanBoard
+
+# tech_profile/port: see backend.graph.yaml's comment — orchestration
+# metadata for spl/tools.py's system-level tools, not part of the core schema.
+tech_profile: vue_typescript
+port: ${{ settings.FRONTEND_VITE_PORT }}
+
+# Source of truth for id/version/domain_type — see
+# docs/DEV/BUILD/refactoring-plan-v1.md §1.1.
+blueprint:
+  id: kanban_app_frontend
+  schema_version: "2.2"
+  graph_schema_version: "2.1"
+  domain_type: software
+  provenance: authored
+  parent_blueprint: null
+  lineage: []
+
+imports:
+  - id: backend
+    graph: ./backend.graph.yaml
+    comment: |
+      The backend REST API is a mandatory dependency. api_client's five calls
+      are verified against backend's five exported endpoint contracts below —
+      a mismatch (e.g. wrong HTTP verb, wrong signature) fails check_call_contracts
+      at graph-load time instead of at integration time.
+
+form:
+  primitives:
+    vuejs:
+      defines: "Vue 3: reactive component system, Composition API, directives"
+      tier: 0
+      kind: config
+    typescript:
+      defines: "TypeScript: static types, interfaces, generics"
+      tier: 0
+      kind: config
+    vite:
+      defines: "Vite: dev server, HMR, module bundler"
+      tier: 0
+      kind: config
+    fetch_api:
+      defines: "Browser fetch API: promise-based HTTP client"
+      tier: 0
+      kind: config
+
+  nodes:
+    api_client:
+      kind: module
+      defines: "TypeScript fetch wrappers for all Kanban API endpoints"
+      composed_of: [fetch_api, typescript]
+      tier: 1
+      ports:
+        get_board:
+          signature: "GET /board -> BoardView"
+          kind: call
+          direction: out
+        list_cards:
+          signature: "GET /cards -> Card[]"
+          kind: call
+          direction: out
+        create_card:
+          signature: "POST /cards (title: string, description?: string, status?: KanbanStatus) -> Card"
+          kind: call
+          direction: out
+        move_card:
+          signature: "PUT /cards/{id}/move (status: KanbanStatus) -> Card"
+          kind: call
+          direction: out
+        delete_card:
+          signature: "DELETE /cards/{id} -> void"
+          kind: call
+          direction: out
+      spec:
+        interface: |
+          export type KanbanStatus = "backlog" | "in_progress" | "done"
+
+          export interface Card {
+            id: number; title: string; description: string;
+            status: KanbanStatus; position: number; created_at: string
+          }
+          export interface CardCreate { title: string; description?: string; status?: KanbanStatus }
+          export interface MoveRequest { status: KanbanStatus }
+          export interface BoardView {
+            backlog: Card[]; in_progress: Card[]; done: Card[]
+          }
+
+          export async function getBoard(): Promise<BoardView>
+          export async function getCards(): Promise<Card[]>
+          export async function createCard(data: CardCreate): Promise<Card>
+          export async function moveCard(id: number, req: MoveRequest): Promise<Card>
+          export async function deleteCard(id: number): Promise<void>
+        contract: |
+          Interface names are EXACTLY Card, CardCreate, MoveRequest, BoardView,
+          KanbanStatus — no CardDTO/CardResponse/CardModel or similar variant.
+          getBoard:  GET /board
+          getCards:  GET /cards
+          createCard: POST /cards with JSON body; returns Card (201)
+          moveCard:  PUT /cards/${id}/move with JSON body { status }; returns Card
+          deleteCard: DELETE /cards/${id}; throws Error if response not ok
+          All functions: if (!response.ok) throw new Error(`HTTP ${response.status}`).
+          Content-Type: application/json on POST and PUT.
+          base URL from VITE_API_BASE_URL env var.
+      verification:
+        node: |
+          - all five functions exported
+          - KanbanStatus type exported
+          - BoardView interface exported
+        edge: |
+          - HTTP methods and paths match backend api_routes contract exactly
+      docs: |
+        - Single HTTP coupling point
+        - StatusSelect uses KanbanStatus type from here
+
+    CardForm:
+      kind: component
+      defines: "Form component for creating a new card"
+      composed_of: [vuejs, typescript]
+      tier: 1
+      spec:
+        interface: |
+          Props: none
+          Emits: created(card: Card)
+          Fields: title (text input, required), description (textarea, optional)
+          Submit button text: "Add Card"
+        contract: |
+          Uses ref() for title = ref('') and description = ref('').
+          On submit: call createCard({ title: title.value, description: description.value })
+          from api_client; emit('created', result) on success; reset both fields to ''.
+          On error: show alert with error message.
+          Import createCard and Card from '../api'.
+      verification:
+        node: |
+          - mount
+          - fill title
+          - submit
+          - verify createCard called
+          - verify 'created' emitted
+          - verify fields reset
+        edge: |
+          - emits 'created' with Card returned by api
+          - createCard receives correct args
+      docs: |
+        - Presentational except for the createCard call
+        - KanbanBoard handles the list refresh
+
+    StatusSelect:
+      kind: component
+      defines: "v-model-compatible dropdown for selecting a Kanban column"
+      composed_of: [vuejs, typescript]
+      tier: 1
+      spec:
+        interface: |
+          Props:
+            modelValue: KanbanStatus  (currently selected status)
+            statuses: KanbanStatus[]  (all available status values)
+          Emits: update:modelValue(value: KanbanStatus)
+          Template:
+            <select :value="modelValue"
+                    @change="$emit('update:modelValue', ($event.target as HTMLSelectElement).value as KanbanStatus)">
+              <option v-for="s in statuses" :key="s" :value="s">{{ formatStatus(s) }}</option>
+            </select>
+            where formatStatus converts "in_progress" → "In Progress", etc.
+        contract: |
+          v-model compatible: emits 'update:modelValue' when selection changes.
+          No internal state — fully controlled by parent via modelValue prop.
+          formatStatus helper: replace underscores with spaces, capitalise each word.
+          Import KanbanStatus from '../api'.
+      verification:
+        node: |
+          - mount with modelValue='backlog' and statuses=['backlog','in_progress','done']
+          - verify 3 options
+          - change to 'done'
+          - verify update:modelValue emitted with 'done'
+        edge: |
+          - parent can v-model bind
+          - no internal state mutation
+      docs: |
+        - Stateless control — same v-model pattern used across this app family
+
+    KanbanCard:
+      kind: component
+      defines: "Purely presentational card row showing title, description, and controls"
+      composed_of: [vuejs, typescript, StatusSelect]
+      tier: 2
+      spec:
+        interface: |
+          Props: card: Card  (import Card from '../api')
+          Emits:
+            move(id: number, status: KanbanStatus)
+            delete(id: number)
+          Template:
+            <div>
+              <strong>{{ card.title }}</strong>
+              <p v-if="card.description">{{ card.description }}</p>
+              <StatusSelect :modelValue="card.status" :statuses="ALL_STATUSES"
+                            @update:modelValue="$emit('move', card.id, $event)" />
+              <button @click="$emit('delete', card.id)">Delete</button>
+            </div>
+            where ALL_STATUSES = ['backlog', 'in_progress', 'done']
+        contract: |
+          No fetch calls — purely presentational.
+          StatusSelect change → emit('move', card.id, newStatus).
+          Delete button → emit('delete', card.id).
+          Import Card, KanbanStatus from '../api'; import StatusSelect from './StatusSelect.vue'.
+      verification:
+        node: |
+          - mount with card prop
+          - verify title rendered
+          - change StatusSelect
+          - verify 'move' emitted with correct id+status
+          - click Delete
+          - verify 'delete' emitted
+        edge: |
+          - no api calls
+          - 'move' carries card.id
+          - StatusSelect receives card.status as modelValue
+      docs: |
+        - Single card display
+        - KanbanColumn handles forwarding
+        - KanbanBoard handles API calls
+
+    KanbanColumn:
+      kind: component
+      defines: "One board column — renders its cards and forwards move/delete events"
+      composed_of: [vuejs, typescript, KanbanCard]
+      tier: 3
+      spec:
+        interface: |
+          Props:
+            title: string         (display name: "Backlog", "In Progress", "Done")
+            status: KanbanStatus  (column identity: "backlog", "in_progress", "done")
+            cards: Card[]
+          Emits:
+            move(id: number, status: KanbanStatus)
+            delete(id: number)
+          Template:
+            <div>
+              <h3>{{ title }} ({{ cards.length }})</h3>
+              <div v-if="cards.length === 0">No cards.</div>
+              <KanbanCard v-for="card in cards" :key="card.id" :card="card"
+                          @move="(id, status) => $emit('move', id, status)"
+                          @delete="$emit('delete', $event)" />
+            </div>
+        contract: |
+          No fetch calls — purely presentational.
+          Forwards 'move' and 'delete' events from KanbanCard up to parent unchanged.
+          Shows "No cards." when cards array is empty.
+          Import Card, KanbanStatus from '../api'; import KanbanCard from './KanbanCard.vue'.
+      verification:
+        node: |
+          - mount with title + cards prop
+          - verify cards rendered
+          - verify empty state
+          - verify move/delete forwarded
+        edge: |
+          - no api calls
+          - move and delete emitted with correct id and status
+      docs: |
+        - One column panel
+        - instantiated three times in KanbanBoard (one per status)
+
+    KanbanBoard:
+      kind: component
+      defines: "Stateful root component — owns board state and orchestrates all children"
+      composed_of: [vuejs, typescript, api_client, CardForm, KanbanColumn]
+      tier: 4
+      spec:
+        interface: |
+          Props: none
+          State:
+            board: Ref<BoardView | null>
+          Computed:
+            columns: ComputedRef<Array<{ status: KanbanStatus; title: string; cards: Card[] }>>
+        contract: |
+          On mount (onMounted): call loadBoard().
+          loadBoard(): board.value = await getBoard()
+          handleCreate(): call loadBoard() to refresh after CardForm emits 'created'.
+          handleMove(id, newStatus): await moveCard(id, { status: newStatus }); await loadBoard().
+          handleDelete(id): await deleteCard(id); await loadBoard().
+          columns computed:
+            if (!board.value) return []
+            return [
+              { status: 'backlog',     title: 'Backlog',     cards: board.value.backlog },
+              { status: 'in_progress', title: 'In Progress', cards: board.value.in_progress },
+              { status: 'done',         title: 'Done',         cards: board.value.done },
+            ]
+          Template:
+            <CardForm @created="handleCreate" />
+            <div style="display:flex; gap:1rem;">
+              <KanbanColumn v-for="col in columns" :key="col.status"
+                            :title="col.title" :status="col.status" :cards="col.cards"
+                            @move="handleMove" @delete="handleDelete" />
+            </div>
+          Import getBoard, moveCard, deleteCard, Card, BoardView, KanbanStatus from '../api'.
+      verification:
+        node: |
+          - mock api
+          - mount
+          - verify getBoard called on mount
+          - verify moveCard+reload on move event
+          - verify deleteCard+reload on delete event
+        edge: |
+          - KanbanColumn receives correct cards subset
+          - CardForm @created triggers reload
+      docs: |
+        - Single stateful root
+        - all four operations (create/view/move/delete) pass through here
+
+    App_vue:
+      kind: component
+      defines: "Root Vue component — mounts KanbanBoard"
+      composed_of: [vuejs, typescript, KanbanBoard]
+      tier: 5
+      spec:
+        interface: |
+          - template contains only <KanbanBoard />
+        contract: |
+          import KanbanBoard from './components/KanbanBoard.vue'
+          No local state; no props.
+      verification:
+        node: |
+          - mount App
+          - verify KanbanBoard rendered
+        edge: |
+          - KanbanBoard is the only child
+          - App passes no props
+      docs: |
+        - Minimal shell — all logic in KanbanBoard
+
+    main_ts:
+      kind: module
+      defines: "Vue application entry point"
+      composed_of: [vuejs, typescript, App_vue]
+      tier: 6
+      spec:
+        interface: |
+          - calls createApp(App).mount('#app')
+        contract: |
+          import { createApp } from 'vue'
+          import App from './App.vue'
+          createApp(App).mount('#app')
+      verification:
+        node: |
+          - file imports from 'vue' and './App.vue'
+          - calls createApp
+        edge: |
+          - App exported from App.vue is the component passed to createApp
+          - mount target '#app' matches index.html div id
+      docs: |
+        - Entry point only — no logic, no state, no other imports
+
+    readme:
+      kind: doc
+      defines: "README.md: setup, run, and test instructions for this frontend"
+      composed_of: [main_ts]
+      tier: 7
+      spec:
+        interface: |
+          Output: README.md at the component root (NOT under src/) — plain Markdown, not code.
+          Do NOT follow the Vue/TypeScript code-style conventions above for this file; those apply
+          to source files only. This file is prose documentation.
+        contract: |
+          Must include, as Markdown sections:
+          - Title + one-paragraph description of what this frontend does
+          - Prerequisites: Node.js version, how to install dependencies (npm install)
+          - Running the dev server: exact command (npm run dev) and the default URL/port
+            (http://localhost:5175), and that it expects the backend at http://localhost:8002
+          - Running tests: exact command (npm test)
+          - Component summary: list each component (CardForm, StatusSelect, KanbanCard,
+            KanbanColumn, KanbanBoard, App) with a one-line description of its role
+        content_outline: |
+          # <Component name>
+          One paragraph description.
+          ## Prerequisites
+          ## Running the dev server
+          ## Running tests
+          ## Components
+      verification:
+        node: |
+          - README.md exists at component root
+          - contains headings for prerequisites, running the dev server, running tests, and components
+      docs: |
+        - Generated last, after all code nodes, so it can describe the actual generated component set
+        - Not verified against the code (kind: doc nodes skip compile/edge-symbol checks — see
+          spl/tools.py verify_node/verify_edges)
+
+function:
+  calls:
+    - id: api_client_calls_backend_get_board
+      from: api_client.get_board
+      to: backend.get_board
+      contract:
+        consumer_requires: "GET /board -> BoardView"
+        provider_guarantees: "GET /board -> BoardView"
+    - id: api_client_calls_backend_list_cards
+      from: api_client.list_cards
+      to: backend.list_cards
+      contract:
+        consumer_requires: "GET /cards -> Card[]"
+        provider_guarantees: "GET /cards -> Card[]"
+    - id: api_client_calls_backend_create_card
+      from: api_client.create_card
+      to: backend.create_card
+      contract:
+        consumer_requires: "POST /cards (title: string, description?: string, status?: KanbanStatus) -> Card"
+        provider_guarantees: "POST /cards (title: string, description?: string, status?: KanbanStatus) -> Card"
+    - id: api_client_calls_backend_move_card
+      from: api_client.move_card
+      to: backend.move_card
+      contract:
+        consumer_requires: "PUT /cards/{id}/move (status: KanbanStatus) -> Card"
+        provider_guarantees: "PUT /cards/{id}/move (status: KanbanStatus) -> Card"
+    - id: api_client_calls_backend_delete_card
+      from: api_client.delete_card
+      to: backend.delete_card
+      contract:
+        consumer_requires: "DELETE /cards/{id} -> void"
+        provider_guarantees: "DELETE /cards/{id} -> void"
+
+  exports:
+    - name: KanbanBoard
+      kind: port
+      from: KanbanBoard.render
+      signature: "() -> void"
+      comment: |
+        The frontend capstone. Composed at the system level (see ./main.graph.yaml)
+        with backend's exports to form the end-to-end board-management applications.
+
+verification:
+  - node: api_client
+    backend: vitest
+    tests: tests/api.spec.ts
+  - node: CardForm
+    backend: vitest
+    tests: tests/CardForm.spec.ts
+  - node: StatusSelect
+    backend: vitest
+    tests: tests/StatusSelect.spec.ts
+  - node: KanbanCard
+    backend: vitest
+    tests: tests/KanbanCard.spec.ts
+  - node: KanbanColumn
+    backend: vitest
+    tests: tests/KanbanColumn.spec.ts
+  - node: KanbanBoard
+    backend: vitest
+    tests: tests/KanbanBoard.spec.ts

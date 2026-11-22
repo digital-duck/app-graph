@@ -1,0 +1,214 @@
+:root { --gide-scale: 1.15; }
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: system-ui, sans-serif; height: 100vh; overflow: hidden; background: #f5f6f8; }
+
+.gide { display: grid; grid-template-rows: 52px 1fr; height: 100vh; }
+
+.gide__topbar {
+  display: flex; align-items: center; gap: 8px;
+  padding: 0 12px; background: #1e293b; color: #fff;
+}
+.gide__topbar h1 { font-size: calc(15px * var(--gide-scale)); font-weight: 600; margin-right: 4px; white-space: nowrap; }
+.gide__topbar input {
+  flex: 1; max-width: 480px; padding: 6px 10px; border-radius: 4px; border: 1px solid #475569;
+  background: #0f172a; color: #fff; font-size: calc(13px * var(--gide-scale));
+}
+.gide__topbar button, .gide__page-toolbar button, .gide__form button {
+  padding: 6px 14px; border-radius: 4px; border: none; background: #2563eb; color: #fff;
+  font-size: calc(13px * var(--gide-scale)); cursor: pointer;
+}
+.gide__topbar button:hover, .gide__page-toolbar button:hover, .gide__form button:hover { background: #1d4ed8; }
+.gide__topbar button:disabled, .gide__page-toolbar button:disabled, .gide__form button:disabled { background: #475569; cursor: not-allowed; }
+.gide__status { font-size: calc(12px * var(--gide-scale)); color: #94a3b8; margin-left: 8px; white-space: nowrap; }
+
+.gide__nav { display: flex; gap: 4px; margin-right: 8px; }
+.gide__nav a {
+  color: #cbd5e1; text-decoration: none; font-size: calc(13px * var(--gide-scale));
+  padding: 6px 12px; border-radius: 4px; white-space: nowrap; cursor: pointer;
+}
+.gide__nav a:hover { background: #334155; color: #fff; }
+.gide__nav a.active { background: #2563eb; color: #fff; }
+.gide__topbar-spacer { flex: 1; }
+
+.gide__topbar-center {
+  flex: 1; display: flex; align-items: center; justify-content: center; gap: 8px;
+}
+
+.gide__topbar a.gide__settings-link {
+  color: #cbd5e1; text-decoration: none; font-size: calc(13px * var(--gide-scale));
+  padding: 6px 8px; border-radius: 4px; white-space: nowrap; cursor: pointer;
+}
+.gide__topbar a.gide__settings-link:hover { background: #334155; color: #fff; }
+
+.gide__edit-toggle {
+  display: flex; align-items: center; gap: 6px;
+  font-size: calc(13px * var(--gide-scale)); color: #cbd5e1; cursor: pointer; user-select: none; white-space: nowrap;
+}
+.gide__edit-toggle input { cursor: pointer; }
+
+/* Per-page shell: an optional toolbar strip + a body that fills the rest of
+   #page-root. Used by Build/Compare/Drift; Graph uses .gide__main instead of
+   .gide__page-body for its split canvas/panel layout. */
+/* min-width: 0 on every link in this chain stops an oversized child (e.g. the
+   graph canvas pinned to a dragged pixel width that no longer fits after a
+   window resize) from growing its ancestors and dragging the persistent
+   topbar off-screen with it — the overflow is meant to be clipped/scrolled
+   locally (graph-canvas has its own overflow-x:auto), not propagated up. */
+#page-root { display: flex; flex-direction: column; height: 100%; min-height: 0; min-width: 0; }
+.gide__page { display: flex; flex-direction: column; height: 100%; min-height: 0; min-width: 0; }
+.gide__page-toolbar {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap; flex: 0 0 auto;
+  padding: 8px 12px; background: #1e293b; color: #fff;
+}
+.gide__page-toolbar select, .gide__page-toolbar input[type="text"] {
+  padding: 6px 10px; border-radius: 4px; border: 1px solid #475569;
+  background: #0f172a; color: #fff; font-size: calc(13px * var(--gide-scale));
+}
+.gide__page-toolbar input[type="text"] { flex: 1; min-width: 160px; }
+.gide__page-toolbar select { flex: 0 0 auto; width: 220px; }
+.gide__page-toolbar label {
+  display: flex; align-items: center; gap: 4px; white-space: nowrap;
+  color: #cbd5e1; font-size: calc(13px * var(--gide-scale));
+}
+.gide__page-status { font-size: calc(12px * var(--gide-scale)); color: #94a3b8; white-space: nowrap; }
+.gide__page-toolbar .gide__page-status { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.gide__page-body { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 16px; background: #fff; }
+
+/* Single-column labeled form (Drift page) — a vertical stack of
+   label+input rows, as opposed to .gide__page-toolbar's horizontal one
+   used by Build/Graph. Shares the same dark toolbar background. */
+.gide__form {
+  display: flex; flex-direction: column; gap: 10px; flex: 0 0 auto;
+  padding: 12px 16px; background: #1e293b;
+}
+.gide__field { display: flex; flex-direction: column; gap: 4px; }
+.gide__field-label {
+  font-size: calc(11px * var(--gide-scale)); text-transform: uppercase;
+  letter-spacing: 0.03em; color: #94a3b8;
+}
+.gide__field input[type="text"], .gide__field input[type="number"] {
+  padding: 6px 10px; border-radius: 4px; border: 1px solid #475569;
+  background: #0f172a; color: #fff; font-size: calc(13px * var(--gide-scale));
+  width: 100%; box-sizing: border-box;
+}
+.gide__form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 16px; }
+.gide__field-row { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.gide__field-row label {
+  display: flex; align-items: center; gap: 4px; white-space: nowrap;
+  color: #cbd5e1; font-size: calc(13px * var(--gide-scale));
+}
+.gide__form button { align-self: flex-start; }
+
+.gide__log {
+  flex: 1 1 auto; min-height: 0; overflow: auto; margin: 0; padding: 14px;
+  background: #0f172a; color: #d1d5db; font-family: Menlo, Consolas, monospace;
+  font-size: calc(12.5px * var(--gide-scale)); white-space: pre-wrap; word-break: break-all;
+}
+
+.gide__table { width: 100%; border-collapse: collapse; font-size: calc(13px * var(--gide-scale)); }
+.gide__table th, .gide__table td { text-align: left; padding: 6px 10px; border-bottom: 1px solid #e2e8f0; }
+.gide__table th { color: #64748b; font-size: calc(11px * var(--gide-scale)); text-transform: uppercase; }
+.gide__hint { color: #64748b; font-size: calc(12.5px * var(--gide-scale)); margin-bottom: 10px; }
+
+.gide__main { flex: 1 1 auto; display: flex; min-height: 0; min-width: 0; overflow: hidden; }
+
+#graph-canvas {
+  background: #fafafa; flex: 1 1 50%; min-width: 160px; min-height: 0;
+  overflow-x: auto; overflow-y: auto;
+  scrollbar-width: auto; scrollbar-color: #64748b #dbe2ea; /* Firefox */
+}
+/* Chromium/Safari overlay scrollbars are invisible by default (only appear on
+   hover), which makes off-screen graph content look permanently cropped
+   rather than scrollable — force a classic always-visible, high-contrast
+   scrollbar instead. */
+#graph-canvas::-webkit-scrollbar { width: 14px; height: 14px; }
+#graph-canvas::-webkit-scrollbar-track { background: #dbe2ea; }
+#graph-canvas::-webkit-scrollbar-thumb { background: #64748b; border-radius: 7px; border: 3px solid #dbe2ea; }
+#graph-canvas::-webkit-scrollbar-thumb:hover { background: #475569; }
+#graph-canvas::-webkit-scrollbar-corner { background: #dbe2ea; }
+
+.gide__splitter {
+  flex: 0 0 6px; background: #e2e8f0; cursor: col-resize; touch-action: none;
+}
+.gide__splitter:hover, .gide__splitter:active { background: #94a3b8; }
+
+.gide__panel {
+  background: #fff; border-left: 1px solid #e2e8f0; padding: 14px; overflow-y: auto; font-size: calc(13px * var(--gide-scale));
+  flex: 1 1 50%; min-width: 160px; min-height: 0;
+}
+.gide__panel h2 { font-size: calc(16px * var(--gide-scale)); margin-bottom: 4px; }
+.gide__panel .kind-badge {
+  display: inline-block; font-size: calc(11px * var(--gide-scale)); padding: 1px 8px; border-radius: 10px; margin-bottom: 10px;
+}
+.gide__panel h3 { font-size: calc(12px * var(--gide-scale)); text-transform: uppercase; color: #64748b; margin: 12px 0 4px; }
+.gide__panel p, .gide__panel pre {
+  white-space: pre-wrap; color: #334155; font-family: inherit;
+  font-size: calc(14px * var(--gide-scale)); line-height: 1.5;
+}
+.gide__panel .empty-hint { color: #94a3b8; font-size: calc(12.5px * var(--gide-scale)); margin-top: 20px; }
+.gide__panel .source-file { font-size: calc(11px * var(--gide-scale)); color: #94a3b8; margin-top: 2px; }
+
+.gide__panel textarea.edit-field {
+  width: 100%; font-family: Menlo, Consolas, monospace; font-size: calc(13px * var(--gide-scale)); color: #1e293b;
+  border: 1px solid #cbd5e1; border-radius: 4px; padding: 6px 8px; resize: vertical;
+}
+.gide__panel textarea.edit-field:focus { outline: none; border-color: #2563eb; }
+.gide__panel .edit-actions { display: flex; align-items: center; gap: 8px; margin-top: 14px; }
+.gide__panel .edit-actions button {
+  padding: 6px 14px; border-radius: 4px; border: none; background: #2563eb; color: #fff;
+  font-size: calc(13px * var(--gide-scale)); cursor: pointer;
+}
+.gide__panel .edit-actions button:hover { background: #1d4ed8; }
+.gide__panel .edit-actions button:disabled { opacity: .6; cursor: default; }
+.gide__panel .edit-actions button.secondary { background: #e2e8f0; color: #334155; }
+.gide__panel .edit-actions button.secondary:hover { background: #cbd5e1; }
+.gide__panel .edit-msg { font-size: calc(12px * var(--gide-scale)); color: #64748b; }
+.gide__panel .edit-msg--error { color: #dc2626; }
+
+.gide__modal-backdrop {
+  position: fixed; inset: 0; background: rgba(15, 23, 42, .45);
+  display: flex; align-items: center; justify-content: center; z-index: 100;
+}
+.gide__modal {
+  background: #fff; border-radius: 8px; padding: 20px 24px; width: 420px; max-width: 90vw;
+  max-height: 85vh; overflow-y: auto; box-shadow: 0 12px 32px rgba(0,0,0,.25);
+}
+.gide__modal--wide { width: 560px; }
+.gide__modal h2 { font-size: calc(16px * var(--gide-scale)); margin-bottom: 14px; color: #1e293b; }
+.gide__modal h3 {
+  font-size: calc(11px * var(--gide-scale)); text-transform: uppercase; color: #64748b;
+  letter-spacing: .04em; margin: 18px 0 8px;
+}
+.gide__modal h3:first-of-type { margin-top: 0; }
+.gide__modal p { font-size: calc(12.5px * var(--gide-scale)); color: #334155; line-height: 1.5; margin-bottom: 8px; }
+.gide__modal code {
+  font-family: Menlo, Consolas, monospace; background: #f1f5f9; color: #1e293b;
+  padding: 1px 4px; border-radius: 3px; font-size: calc(11.5px * var(--gide-scale));
+}
+.gide__modal ul { list-style: none; margin: 4px 0; }
+.gide__modal li { padding: 3px 0; font-size: calc(12.5px * var(--gide-scale)); color: #334155; word-break: break-all; }
+.gide__modal .legend-list { display: flex; flex-direction: column; gap: 2px; }
+.gide__modal .legend-item {
+  display: flex; align-items: center; gap: 6px; padding: 3px 0;
+  font-size: calc(12.5px * var(--gide-scale)); color: #334155;
+}
+.gide__modal .swatch { width: 12px; height: 12px; border-radius: 3px; flex-shrink: 0; }
+.gide__modal label {
+  display: block; font-size: calc(12.5px * var(--gide-scale)); color: #334155; margin: 10px 0 4px;
+}
+.gide__modal input[type="text"], .gide__modal input[type="password"], .gide__modal select {
+  width: 100%; padding: 6px 8px; border-radius: 4px; border: 1px solid #cbd5e1;
+  font-size: calc(13px * var(--gide-scale)); color: #1e293b;
+}
+.gide__modal input[type="range"] { width: 100%; }
+.gide__modal .settings-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.gide__modal .settings-hint { font-size: calc(11.5px * var(--gide-scale)); color: #94a3b8; margin-top: 10px; }
+.gide__modal .settings-hint.settings-error { color: #ef4444; }
+.gide__modal .settings-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
+.gide__modal .settings-actions button {
+  padding: 6px 14px; border-radius: 4px; border: none; background: #2563eb; color: #fff;
+  font-size: calc(13px * var(--gide-scale)); cursor: pointer;
+}
+.gide__modal .settings-actions button.secondary { background: #e2e8f0; color: #334155; }
+.gide__modal .settings-actions button:hover { filter: brightness(.92); }

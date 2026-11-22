@@ -1,0 +1,6 @@
+{
+  "node": "readme",
+  "tech_profile": "python_fastapi",
+  "cached_at": "2026-08-12T03:37:06.571809+00:00",
+  "code": "# Todo Backend\n\nA lightweight REST API for managing a todo list, built with FastAPI and SQLite. It exposes four endpoints for listing, creating, toggling, and deleting todos. The database is created automatically on startup \u2014 no migration step required.\n\n## Prerequisites\n\n- Python 3.11+\n- Install dependencies:\n\n```bash\npip install -r requirements.txt\n```\n\n`requirements.txt` should include: `fastapi`, `uvicorn`, `sqlalchemy`, `pydantic`.\n\n## Running the server\n\n```bash\nuvicorn app.main:app --reload\n```\n\n- Base URL: `http://localhost:8000`\n- OpenAPI docs: `http://localhost:8000/docs`\n\n## Running tests\n\n```bash\npytest tests/\n```\n\n## API endpoints\n\n| Method | Path | Purpose |\n|--------|------|---------|\n| `GET` | `/todos` | Return all todos |\n| `POST` | `/todos` | Create a new todo |\n| `PUT` | `/todos/{id}` | Toggle the completed state of a todo |\n| `DELETE` | `/todos/{id}` | Delete a todo by ID |"
+}

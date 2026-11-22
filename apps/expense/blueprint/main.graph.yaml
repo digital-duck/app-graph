@@ -1,0 +1,222 @@
+# ── Unified Duality Graph Schema v2.1 — Integrated Profile (Graph of Graphs) ─
+# Migrated from graph-driven-workflow/apps/SPL/expense/system.yaml
+domain: software/apps/expense
+target_languages: [python, typescript]
+comment: |
+  Expense tracker: Vue.js frontend + FastAPI backend + SQLite storage. Third
+  app ported into graph-code/apps/, backend+frontend like apps/todo/ but with
+  SQL aggregation (report_aggregator/SummaryView) and multi-parameter filtering
+  (category + date range) neither apps/todo/ nor apps/dispatch/ exercised.
+capstone: manage_expenses
+
+# Source of truth for id/version/domain_type — see
+# docs/DEV/BUILD/refactoring-plan-v1.md §1.1.
+blueprint:
+  id: expense_app
+  schema_version: "2.2"
+  graph_schema_version: "2.1"
+  domain_type: integrated
+  provenance: authored
+  parent_blueprint: null
+  lineage: []
+
+imports:
+  - id: backend
+    graph: ./backend.graph.yaml
+    comment: |
+      FastAPI REST API at :8001, OpenAPI schema at /docs, CORS enabled for :5174.
+      Mandatory — the frontend cannot function without it.
+  - id: frontend
+    graph: ./frontend.graph.yaml
+    comment: |
+      Vue.js SPA served by Vite at :5174. Already imports backend.graph.yaml
+      itself to verify api_client's call contracts.
+
+ports:
+  backend: ${{ settings.BACKEND_FASTAPI_PORT }}
+  frontend: ${{ settings.FRONTEND_VITE_PORT }}
+
+form:
+  nodes:
+    expense_app_shell:
+      kind: component
+      defines: "System integration shell: frontend at :5174 consuming backend REST API at :8001 via CORS"
+      tier: 1
+      depends_on: [backend, frontend]
+
+    readme:
+      kind: doc
+      defines: "README.md: product-level overview, setup, and run instructions for the whole expense app"
+      composed_of: [expense_app_shell]
+      tier: 2
+      spec:
+        interface: |
+          Output: README.md at the system root (the same directory as this graph.yaml, or
+          --output_dir when integrate_system.spl was run with one) — plain Markdown, not code.
+          CRITICAL: output ONLY the Markdown document itself — no preamble narration, no tool-call
+          syntax (see apps/dispatch/blueprint/backend.graph.yaml's readme node for the real
+          incident this instruction guards against).
+        contract: |
+          Must include, as Markdown sections:
+          - Title + one-paragraph description of the whole app
+          - Architecture: frontend (:5174) calls backend (:8001) over REST, CORS enabled — one
+            sentence, link to each component's own README.md
+          - Running the full system: build it (`spl3 run spl/build_app.spl ...`), then start
+            backend and frontend together
+          - Applications: one line per application from this graph's `applications:` block
+        content_outline: |
+          # <App name>
+          One paragraph description.
+          ## Architecture
+          ## Running the full system
+          ## Applications
+      verification:
+        node: |
+          - README.md exists at the system root
+          - contains headings for architecture, running the full system, and applications
+      docs: |
+        - Generated last by integrate_system.spl, after both components are built and
+          acceptance tests have run — so it can report real pass/fail results
+
+function:
+  exports:
+    - name: manage_expenses
+      kind: port
+      from: expense_app_shell.main
+      signature: "() -> void"
+      comment: |
+        Single entry point. Serves the frontend, starts the backend, and wires
+        CORS between them. The system capstone.
+
+applications:
+
+  add_expense:
+    defines: |
+      - User fills the expense form and submits
+      - new expense appears in list immediately
+    needs:
+      backend: [api_routes]
+      frontend: [ExpenseDashboard]
+    tier: 1
+    spec:
+      user_story: |
+        - As a user I can add an expense with amount, category, date, and description
+      contract: |
+        - POST /expenses -> 201
+        - item appears in list
+        - negative/zero amount rejected (422)
+        - Test setup fixture field names, exactly: {amount, category, date, description} —
+          amount is a plain number (e.g. 12.50), date is an ISO date string (e.g. "2026-01-15")
+    verification: |
+      - e2e: submit form -> POST fires -> list re-renders with new expense
+    docs: |
+      - Entry point for the expense workflow
+
+  list_expenses:
+    defines: |
+      - User sees all expenses on page load, persisted across sessions
+    needs:
+      backend: [api_routes]
+      frontend: [ExpenseDashboard]
+    tier: 1
+    spec:
+      user_story: |
+        - As a user I can see all my expenses when I open the app
+      contract: |
+        - GET /expenses on mount
+        - renders one row per expense
+        - shows empty state when none
+    verification: |
+      - e2e: seed 3 expenses -> reload -> all 3 render
+    docs: |
+      - Validates persistence across page reloads
+
+  filter_by_category:
+    defines: |
+      - User selects a category in the dropdown
+      - list and summary update to show only that category
+    needs:
+      backend: [api_routes]
+      frontend: [ExpenseDashboard]
+    tier: 1
+    spec:
+      user_story: |
+        - As a user I can filter expenses by category to see my spending in one area
+      contract: |
+        - selecting a category fires GET /expenses?category=X and GET /expenses/summary?category=X
+        - list and summary update
+    verification: |
+      - e2e: add Food and Transport expenses -> select Food -> only Food expenses shown
+    docs: |
+      - CategoryFilter drives both list and summary refresh
+
+  delete_expense:
+    defines: |
+      - User clicks Delete on an expense row to permanently remove it
+    needs:
+      backend: [api_routes]
+      frontend: [ExpenseDashboard]
+    tier: 1
+    spec:
+      user_story: |
+        - As a user I can delete an expense I no longer need
+      contract: |
+        - DELETE /expenses/{id} -> 204
+        - item removed from list
+        - summary updates
+    verification: |
+      - e2e: click Delete -> DELETE fires -> item removed -> summary re-calculated
+    docs: |
+      - Summary must refresh after delete to reflect updated totals
+
+  view_summary:
+    defines: |
+      - User sees total and per-category breakdown of current filtered expenses
+    needs:
+      backend: [api_routes]
+      frontend: [ExpenseDashboard]
+    tier: 1
+    spec:
+      user_story: |
+        - As a user I can see my total spending and a breakdown by category
+      contract: |
+        - GET /expenses/summary -> ExpenseSummary
+        - SummaryView renders total and by_category table
+        - Exact response shape: {"total": <number>, "by_category": [{"category": <string>,
+          "total": <number>, "count": <int>}, ...]} — by_category is a LIST of objects, one
+          per category, NOT a dict/object keyed by category name. total and by_category[].total
+          are plain JSON numbers (not strings — see backend.graph.yaml's data_schema
+          @field_serializer contract).
+    verification: |
+      - e2e: seed expenses in 2 categories -> summary shows both with correct totals
+    docs: |
+      - report_aggregator feeds SummaryView
+
+  manage_expenses:
+    defines: |
+      - User can add, view, filter, delete expenses and see spending summaries — full workflow
+    needs:
+      applications: [add_expense, list_expenses, filter_by_category, delete_expense, view_summary]
+    tier: 2
+    capstone: true
+    spec:
+      user_story: |
+        - As a user I can track my expenses by category, view totals, and filter my history
+      contract: |
+        - full lifecycle: empty -> add -> list -> filter -> delete -> empty
+        - summary reflects state at each step
+    verification: |
+      - golden path: add 3 expenses (2 Food, 1 Transport) -> select Food -> see 2 items ->
+        delete 1 -> summary shows 1 Food
+    docs: |
+      - The capstone — every node exists in service of this workflow
+
+verification:
+  - node: expense_app_shell
+    tool: integrate_system.spl
+    checks:
+      - CORS headers present on all backend responses
+      - frontend loads without console errors
+      - all system applications pass acceptance tests against live system
+    docs: |
+      - README.md (product-level) — see the `readme` node above

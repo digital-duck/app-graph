@@ -1,0 +1,281 @@
+# ── Unified Duality Graph Schema v2.1 — Integrated Profile (Graph of Graphs) ─
+# Migrated from graph-driven-workflow/apps/SPL/fullstack/system.yaml
+#
+# The original system.yaml hand-merged backend/graph.yaml and frontend/graph.yaml
+# under a bespoke `components:` registry. Here the two component graphs stay
+# fully independent files and are composed declaratively via `imports:` —
+# resolve_imports() pulls each component's `function.exports` in, namespaced
+# as `<alias>.<export_name>`, with no copy/merge of either file's content.
+domain: software/apps/fullstack
+target_languages: [python, typescript]
+comment: |
+  Full-stack FastAPI + Vue 3 template: JWT auth, RBAC (superuser flag), user
+  management, owner-scoped items CRUD. First app in this family with
+  authentication — self-registration, login, password hashing/reset, and
+  per-user data scoping, on top of the CRUD pattern established by `todo`/
+  `kanban`. Scope (per the source app's own BRIEF.md): auth + users + items,
+  no Alembic migrations, no real email sending, no Playwright E2E.
+capstone: manage_items_authenticated
+
+# Source of truth for id/version/domain_type — see
+# docs/DEV/BUILD/refactoring-plan-v1.md §1.1.
+blueprint:
+  id: fullstack_app
+  schema_version: "2.2"
+  graph_schema_version: "2.1"
+  domain_type: integrated
+  provenance: authored
+  parent_blueprint: null
+  lineage: []
+
+imports:
+  - id: backend
+    graph: ./backend.graph.yaml
+    comment: |
+      FastAPI REST API at :8004, all routes under /api/v1, JWT bearer auth,
+      OpenAPI schema at /docs, CORS enabled for :5177. Mandatory — the
+      frontend cannot function without it.
+  - id: frontend
+    graph: ./frontend.graph.yaml
+    comment: |
+      Vue.js SPA served by Vite at :5177. Already imports backend.graph.yaml
+      itself to verify api_client's call contracts; this top-level graph only
+      needs both components present to assemble the system-level applications.
+
+# ── Port configuration (system-level, orchestration metadata) ────────────────
+# Declared once here as the system's single source of truth; each component's
+# own graph.yaml also carries a `port:` field (backend.graph.yaml: 8004,
+# frontend.graph.yaml: 5177) for standalone use — spl/tools.py's
+# check_port_consistency() (wired into integrate_system.spl) warns if a
+# component's own declared port ever drifts from what's declared here.
+ports:
+  backend: ${{ settings.BACKEND_FASTAPI_PORT }}
+  frontend: ${{ settings.FRONTEND_VITE_PORT }}
+
+form:
+  nodes:
+    fullstack_app_shell:
+      kind: component
+      defines: "System integration shell: frontend at :5177 consuming backend REST API at :8004 via CORS"
+      tier: 1
+      depends_on: [backend, frontend]
+      comment: |
+        frontend depends on backend's OpenAPI contract; api_client (in frontend)
+        is verified against backend's six exported endpoints before this shell
+        is considered complete — see frontend.graph.yaml's function.calls.
+
+    readme:
+      kind: doc
+      defines: "README.md: product-level overview, setup, and run instructions for the whole fullstack app"
+      composed_of: [fullstack_app_shell]
+      tier: 2
+      spec:
+        interface: |
+          Output: README.md at the system root (the same directory as this graph.yaml,
+          or --output_dir when integrate_system.spl was run with one) — plain Markdown,
+          not code.
+        contract: |
+          Must include, as Markdown sections:
+          - Title + one-paragraph description of the whole app (Vue frontend + FastAPI
+            backend + SQLite, JWT auth, the applications it supports)
+          - Architecture: frontend (:5177) calls backend (:8004) over REST under /api/v1,
+            CORS enabled, JWT bearer auth — one sentence, link to each component's own
+            README.md for its own setup/run/test instructions rather than repeating them
+          - Running the full system: build it (`spl3 run spl/build_app.spl ...`), then start
+            backend and frontend together
+          - Default login: admin@example.com / adminpassword (auto-created by the backend's
+            lifespan handler on first startup)
+          - Applications: one line per application from this graph's `applications:` block
+            (user_registers, user_logs_in, user_manages_items, superuser_manages_users,
+            user_resets_password, manage_items_authenticated) — the user-facing
+            capabilities, not implementation detail
+        content_outline: |
+          # <App name>
+          One paragraph description.
+          ## Architecture
+          ## Running the full system
+          ## Applications
+      verification:
+        node: |
+          - README.md exists at the system root
+          - contains headings for architecture, running the full system, and applications
+      docs: |
+        - Generated last, by integrate_system.spl, after both components are built and
+          acceptance tests have run — so it can report real pass/fail results, not just
+          intent
+        - Not verified against code (kind: doc nodes skip compile/edge-symbol checks — see
+          spl/tools.py verify_node/verify_edges); also not build_component.spl-generated
+          like the per-component readmes, since this system graph.yaml is never passed to
+          build_component.spl directly
+
+function:
+  exports:
+    - name: manage_items_authenticated
+      kind: port
+      from: fullstack_app_shell.main
+      signature: "() -> void"
+      comment: |
+        Single entry point. Serves the frontend, starts the backend, and wires
+        CORS + JWT auth between them. The system capstone — every node in both
+        component graphs exists in service of this workflow.
+
+# ── System-level applications ────────────────────────────────────────────────
+# Applications span components — they are the cross-component use-cases.
+# superuser_manages_users and user_resets_password are backend-only (no
+# frontend admin panel or password-reset UI in scope, per BRIEF.md) — their
+# `needs.frontend` is intentionally empty.
+applications:
+
+  user_registers:
+    defines: |
+      - Anonymous user self-registers
+      - receives UserPublic
+      - can then log in
+    needs:
+      backend: [api_routes]
+      frontend: [LoginForm]
+    tier: 1
+    spec:
+      user_story: |
+        - As a new user I can create my own account without needing an admin
+      contract: |
+        POST /api/v1/users/signup with { email, password, full_name? } → 200 UserPublic.
+        400 if email already taken. Password min 8 chars.
+    verification: |
+      - pytest test_users_routes.py::test_register_user
+      - vitest LoginForm renders a signup link
+    docs: |
+      - Backend-verified end to end; frontend only renders the link (see LoginForm's
+        contract in frontend.graph.yaml) — no wired signup submission in this app's UI
+
+  user_logs_in:
+    defines: |
+      - Registered user logs in
+      - receives JWT token for subsequent requests
+    needs:
+      backend: [api_routes]
+      frontend: [LoginForm]
+    tier: 1
+    spec:
+      user_story: |
+        - As a registered user I can log in with email + password and get a bearer token
+      contract: |
+        POST /api/v1/login/access-token with form-data username=email, password.
+        200 Token { access_token, token_type: 'bearer' }.
+        400 on bad credentials or inactive user.
+    verification: |
+      - pytest test_login_routes.py::test_login_access_token
+      - vitest LoginForm emits loggedIn
+    docs: |
+      - Entry point for the authenticated workflow
+
+  user_manages_items:
+    defines: |
+      - Authenticated user creates, views, edits, and deletes their own items
+    needs:
+      backend: [api_routes]
+      frontend: [ItemDashboard]
+    tier: 1
+    spec:
+      user_story: |
+        - As a logged-in user I can manage my personal items (CRUD)
+      contract: |
+        GET /api/v1/items/ → ItemsPublic { data: [...], count }. Regular user sees only own items.
+        POST /api/v1/items/ with { title, description? } → ItemPublic.
+        PUT /api/v1/items/{id} with partial ItemUpdate → ItemPublic. 403 if not owner.
+        DELETE /api/v1/items/{id} → Message. 403 if not owner.
+        There is no pre-existing regular user account. To obtain an authenticated regular
+        user's token for testing: first POST /api/v1/users/signup with a fresh, uniquely
+        generated email (e.g. using a timestamp or random suffix so repeated test runs don't
+        collide with "400 email exists") and a password of your own choosing (min 8 chars),
+        THEN log in with those exact same credentials via POST /api/v1/login/access-token.
+        Do NOT assume any specific email/password pair already exists in the database.
+    verification: |
+      - pytest test_items_routes.py
+      - vitest ItemDashboard CRUD operations
+    docs: |
+      - Core item workflow; owner-scoping is the invariant every step must respect
+
+  superuser_manages_users:
+    defines: |
+      - Superuser lists, creates, updates, and deletes any user
+    needs:
+      backend: [api_routes]
+    tier: 1
+    spec:
+      user_story: |
+        - As a superuser I can administer all user accounts
+      contract: |
+        GET /api/v1/users/ → UsersPublic { data: [...], count }. 403 for non-superuser.
+        POST /api/v1/users/ → UserPublic. Superuser-only; 400 if email exists.
+        PATCH /api/v1/users/{user_id} → UserPublic. Superuser-only.
+        DELETE /api/v1/users/{user_id} → Message. Superuser-only; 403 if deleting self.
+        To obtain a superuser token for testing: log in as the auto-created first superuser,
+        email "admin@example.com", password "adminpassword" (exactly these two values — this
+        app's own constants, NOT "changethis" or any other value from an unrelated reference
+        template) via POST /api/v1/login/access-token.
+    verification: |
+      - pytest test_users_routes.py (superuser flows)
+    docs: |
+      - Backend-only — no frontend admin panel in this app's scope
+
+  user_resets_password:
+    defines: |
+      - User who forgot password recovers access via JWT reset token
+    needs:
+      backend: [api_routes]
+    tier: 1
+    spec:
+      user_story: |
+        - As a user who forgot my password I can reset it via a token
+      contract: |
+        POST /api/v1/password-recovery/{email} → Message (always 200; no user enumeration).
+        Token is a JWT with sub=email, exp=48h from SECRET_KEY.
+        POST /api/v1/reset-password/ with { token, new_password } → Message on success.
+        400 on expired/invalid token or inactive user.
+    verification: |
+      - pytest test_login_routes.py::test_password_recovery + test_reset_password
+    docs: |
+      - Backend-only — no password-reset UI in this app's scope; the reset token is
+        returned in the response body rather than emailed (no SMTP in this prototype)
+
+  manage_items_authenticated:
+    defines: |
+      - Full lifecycle: register → login → create item → edit → delete → verify gone
+    needs:
+      applications: [user_registers, user_logs_in, user_manages_items]
+    tier: 2
+    capstone: true
+    spec:
+      user_story: |
+        Golden path:
+        1. POST /api/v1/users/signup with { email, password } → UserPublic
+        2. POST /api/v1/login/access-token (form-data) → Token
+        3. POST /api/v1/items/ with { title: "My item" } → ItemPublic (id=uuid)
+        4. GET /api/v1/items/ → ItemsPublic { data: [item], count: 1 }
+        5. PUT /api/v1/items/{id} with { title: "Updated" } → ItemPublic (title changed)
+        6. DELETE /api/v1/items/{id} → Message { message: "Item deleted successfully" }
+        7. GET /api/v1/items/ → ItemsPublic { data: [], count: 0 }
+      contract: |
+        Each step uses the token from step 2 in the Authorization header.
+        Regular user cannot see or modify items belonging to other users.
+        Superuser can see all items across all users.
+        Valid roles: is_superuser is a plain boolean; the created user in step 1 is a
+        regular (non-superuser) user, distinct from the auto-created
+        admin@example.com/adminpassword first superuser.
+    verification: |
+      - full lifecycle across register/login/create/list/update/delete/list
+      - each request uses the bearer token acquired at login
+    docs: |
+      - The capstone — every node exists in service of this workflow
+
+verification:
+  - node: fullstack_app_shell
+    tool: integrate_system.spl
+    checks:
+      - CORS headers present on all /api/v1 responses
+      - frontend loads without console errors
+      - all applications with a frontend caller pass acceptance tests against the live system
+    docs: |
+      - README.md (product-level) — see the `readme` node above
+      - deployment guide

@@ -1,0 +1,261 @@
+# ── Unified Duality Graph Schema v2.1 — Curriculum Profile ──────────────────
+domain: science/physics/classical_mechanics
+enforce_two_radical: true
+comment: |
+  Classical mechanics from first principles: position and time as first-radical
+  primitives, mass and force as second-radical primitives. Capstone at normal modes.
+
+blueprint:
+  id: classical_mechanics
+  schema_version: "2.2"
+  graph_schema_version: "2.1"
+  domain_type: curriculum
+  provenance: authored
+  parent_blueprint: null
+  lineage: []
+
+capstone: normal_modes
+tech_profile: curriculum
+# No `port:` — a ConceptBook has no runtime service; built by build_component.spl,
+# not build_app.spl, same reasoning as apps/jwt_provider/blueprint/jwt_provider.graph.yaml.
+
+form:
+  primitives:
+    position:
+      symbol: x
+      defines: "first radical — configuration; where things are"
+      tier: 0
+      kind: state
+      comment: |
+        Chosen as a first-radical primitive. All kinematic quantities derive
+        from position and time. Do not conflate with displacement (tier 1).
+    time:
+      symbol: t
+      defines: "first radical — the parameter motion unfolds in"
+      tier: 0
+      kind: state
+    mass:
+      symbol: m
+      defines: "second radical — inertia; resistance to changes in motion"
+      tier: 0
+      kind: property
+    force:
+      symbol: F
+      defines: "second radical — interaction; what changes states of motion"
+      tier: 0
+      kind: operator
+      comment: |
+        Bridge between kinematics (first radical) and dynamics (second radical).
+        Newton's second law F=ma is the composition rule.
+
+  first_radical_primitives: [position, time]
+
+  nodes:
+    velocity:
+      kind: concept
+      defines: "rate of change of position — v = dx/dt"
+      tier: 1
+      composed_of: [position, time]
+      comment: |
+        Emphasize the limit process from average to instantaneous velocity.
+        Students often conflate speed (scalar) with velocity (vector).
+      spec:
+        interface: |
+          Output: lessons/velocity.md — a self-contained lesson section, Markdown.
+          Must contain: a "## Definition" section giving v = dx/dt; a worked example
+          differentiating a concrete x(t) (e.g. x(t) = t**2); a "## Common
+          Misconception" callout distinguishing speed (scalar, |v|) from velocity
+          (vector, signed/directional).
+        contract: |
+          The definition MUST be derived as the limit of the average-velocity
+          difference quotient (x(t+Δt) - x(t)) / Δt as Δt → 0, not merely stated —
+          this is the node's pedagogical point per the comment above.
+          The worked example MUST be independently checkable by sympy.diff: pick
+          x(t) = t**2, show v(t) = 2t, and state that this matches
+          sympy.diff(t**2, t).
+      verification:
+        node: |
+          - lesson defines v = dx/dt via the limit of a difference quotient, not
+            by assertion alone
+          - worked example's derivative matches sympy.diff(x(t), t) for the chosen x(t)
+          - explicitly distinguishes speed from velocity
+
+    acceleration:
+      kind: concept
+      defines: "rate of change of velocity — a = dv/dt"
+      tier: 2
+      composed_of: [velocity, time]
+      spec:
+        interface: |
+          Output: lessons/acceleration.md — Markdown, same structure as velocity.md:
+          "## Definition" (a = dv/dt = d²x/dt²), a worked example building on
+          velocity.md's x(t) = t**2, "## Common Misconception" callout (acceleration
+          is not "speeding up" only — constant-magnitude circular motion still
+          accelerates, since velocity's direction is changing).
+        contract: |
+          MUST be presented as the second derivative of position, not just the
+          first derivative of velocity in isolation — tie back to velocity.md's
+          x(t) example so the chain (position → velocity → acceleration) is visibly
+          continuous, matching this node's composed_of: [velocity, time].
+      verification:
+        node: |
+          - lesson defines a = dv/dt and connects it to d²x/dt²
+          - worked example continues velocity.md's x(t) = t**2 example, a(t) = 2
+          - misconception callout covers direction-only acceleration (circular motion)
+
+    momentum:
+      kind: concept
+      defines: "p = m·v — the conserved currency of motion"
+      tier: 2
+      composed_of: [mass, velocity]
+      spec:
+        interface: |
+          Output: lessons/momentum.md — Markdown. "## Definition" (p = m·v), a
+          "## Conservation" section stating total momentum of an isolated system is
+          constant, and a two-body worked example (e.g. elastic or perfectly
+          inelastic collision) showing p_before = p_after numerically.
+        contract: |
+          The conservation claim MUST be scoped correctly: conserved for an
+          isolated system (net external force = 0), not universally — state this
+          precondition explicitly, don't overgeneralize.
+          The worked example's two masses/velocities MUST be chosen so
+          m1*v1 + m2*v2 (before) equals the stated total after the interaction,
+          i.e. numerically self-consistent, checkable by direct arithmetic.
+      verification:
+        node: |
+          - lesson defines p = m·v
+          - conservation section states the isolated-system precondition explicitly
+          - worked example's before/after totals are numerically equal
+
+    newtons_second_law:
+      kind: concept
+      defines: "F = m·a — the fundamental equation of motion"
+      tier: 3
+      composed_of: [force, mass, acceleration]
+      enriched_by: [momentum]
+      comment: |
+        momentum listed as enrichment: it deepens the F=dp/dt formulation
+        but is not required to introduce F=ma in the Newtonian frame.
+      spec:
+        interface: |
+          Output: lessons/newtons_second_law.md — Markdown. "## Definition" (F = m·a),
+          a worked example solving for one of F/m/a given the other two, and an
+          "## Enrichment" section (optional depth, drawing on momentum.md) deriving
+          the equivalent form F = dp/dt for constant mass.
+        contract: |
+          The core statement (F = m·a) MUST stand alone and be teachable without
+          the Enrichment section — per the comment above, momentum is not required
+          to introduce F=ma in the Newtonian frame, only to deepen it.
+          The F = dp/dt derivation, when present, MUST show dp/dt = d(mv)/dt =
+          m·dv/dt = m·a for constant mass, explicitly noting where the constant-mass
+          assumption is used.
+      verification:
+        node: |
+          - lesson states F = m·a as the primary result, independent of the
+            Enrichment section
+          - worked example correctly solves the F=ma relation for the unknown variable
+          - Enrichment section (if present) derives F=dp/dt and flags the
+            constant-mass assumption
+
+    normal_modes:
+      kind: concept
+      defines: "natural oscillation frequencies of a coupled system"
+      tier: 4
+      composed_of: [newtons_second_law]
+      enriched_by: [momentum]
+      comment: |
+        momentum enriches via the Hamiltonian/Lagrangian bridge.
+        The minimal path is through newtons_second_law alone.
+      spec:
+        interface: |
+          Output: lessons/normal_modes.md — Markdown, the capstone lesson. "##
+          Setup" describing a two-mass, two-spring coupled system; "## Equations of
+          Motion" applying F=m·a to each mass (from newtons_second_law.md); "##
+          Normal Mode Frequencies" solving the resulting eigenvalue problem for the
+          two natural frequencies; "## Enrichment" (optional) sketching the
+          Hamiltonian/Lagrangian bridge via momentum.
+        contract: |
+          The equations of motion MUST be derived by applying F=m·a (from
+          newtons_second_law.md) to each mass individually — the minimal path
+          stated in the comment above — not introduced as a black-box result.
+          The two normal-mode frequencies MUST be obtained by solving the coupled
+          ODE system's characteristic equation (eigenvalues of the resulting
+          matrix), not merely quoted.
+      verification:
+        node: |
+          - equations of motion are derived from F=m·a applied per-mass, referencing
+            newtons_second_law
+          - normal-mode frequencies are obtained via eigenvalue solution of the
+            coupled system, matching sympy's eigenvalue solve for the same
+            stiffness/mass matrix
+
+    readme:
+      kind: doc
+      defines: "README.md: table of contents for the five lessons, in dependency order"
+      tier: 5
+      composed_of: [normal_modes]
+      spec:
+        interface: |
+          Output: README.md at the component root (NOT under lessons/) — plain
+          Markdown, not a lesson itself.
+          CRITICAL: output ONLY the Markdown document itself — no preamble
+          narration, no tool-call syntax, no commentary before or after the
+          document.
+        contract: |
+          Must include, as Markdown sections:
+          - Title + one-paragraph description of the ConceptBook (classical
+            mechanics from first principles: position/time as first-radical
+            primitives, mass/force as second-radical primitives, capstone at
+            normal_modes)
+          - "## Contents": an ordered list of the five lessons in build/tier
+            order (velocity, acceleration, momentum, newtons_second_law,
+            normal_modes), each a link to lessons/<node>.md with a one-line
+            description of what it covers and, where relevant, which earlier
+            lesson it builds on (e.g. acceleration builds on velocity's
+            worked example)
+          - "## Prerequisite graph": a short prose or ASCII sketch of how the
+            four primitives (position, time, mass, force) compose into the
+            five lessons — position/time -> velocity -> acceleration;
+            mass+velocity -> momentum; force+mass+acceleration ->
+            newtons_second_law (enriched by momentum); newtons_second_law ->
+            normal_modes (the capstone)
+          - "## Applications": orbital_mechanics and robotics, one line each,
+            each naming which lessons it draws on
+        content_outline: |
+          # <ConceptBook name>
+          One paragraph description.
+          ## Contents
+          ## Prerequisite graph
+          ## Applications
+      verification:
+        node: |
+          - README.md exists at component root
+          - Contents section links all five lessons in dependency order
+          - Applications section names orbital_mechanics and robotics
+
+verification:
+  - node: velocity
+    backend: sympy
+    lab: sympy.diff
+    play: "differentiate x(t) = t**2; compare v(t) against the difference quotient"
+  - node: acceleration
+    backend: sympy
+    lab: sympy.diff
+  - node: momentum
+    backend: sage|sympy
+    lab: graph_lib.verify_momentum_conservation
+  - node: newtons_second_law
+    backend: sympy
+  - node: normal_modes
+    backend: sympy
+
+applications:
+  orbital_mechanics:
+    uses: [normal_modes, newtons_second_law]
+    defines: "Predict planetary orbits from gravitational normal modes"
+    comment: |
+      Bridges classical mechanics and quantum mechanics via the
+      correspondence principle.
+  robotics:
+    uses: [newtons_second_law, momentum]
+    defines: "Design robotic arms using constrained dynamics"

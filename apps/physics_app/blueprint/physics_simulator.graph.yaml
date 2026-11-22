@@ -1,0 +1,349 @@
+# ── Unified Duality Graph Schema v2.1 — Reactive App Profile ────────────────
+# Migrated to a fully buildable blueprint (2026-08-13) from a minimal
+# pattern-reference fixture (see apps/README.md's fixtures table) — that
+# earlier version had no spec.interface/spec.contract detailed enough for
+# code generation, no requirements/readme doc nodes, no tech_profile. This
+# version follows the same authoring convention as apps/jwt_provider/'s
+# migration: plain stdlib Python, no GUI toolkit (a real Tkinter/browser
+# widget layer is out of scope for exercising the reactive_app schema —
+# position_slider/velocity_graph/audit_logger are testable observer-pattern
+# classes, not rendered widgets), fully unit-testable without timers or I/O.
+domain: software/simulation/physics
+target_languages: [python]
+comment: |
+  Interactive physics simulator: a slider drives position; downstream widgets
+  subscribe to position_updated to redraw velocity curves in real time.
+capstone: velocity_graph
+
+tech_profile: python_library
+# No `port:` — this component has no HTTP server; it is imported into
+# apps/physics_app/blueprint/main.graph.yaml the same way apps/jwt_provider's
+# jwt_provider.graph.yaml is imported into auth_middleware.graph.yaml.
+
+blueprint:
+  id: physics_simulator
+  schema_version: "2.2"
+  graph_schema_version: "2.1"
+  domain_type: reactive_app
+  provenance: authored
+  parent_blueprint: null
+  lineage: []
+
+form:
+  primitives:
+    python:
+      defines: "Python 3.x runtime and standard library"
+      tier: 0
+      kind: config
+    position_value:
+      symbol: x
+      defines: "The current position of the simulated object"
+      tier: 0
+      kind: state
+      comment: |
+        Single source of truth for the object's position. All visualizations
+        derive from this value.
+
+  nodes:
+    position_event:
+      kind: concept
+      defines: "PositionUpdate: the event payload emitted when position changes"
+      composed_of: [position_value]
+      tier: 1
+      spec:
+        interface: |
+          from __future__ import annotations
+          from dataclasses import dataclass
+          from datetime import datetime
+
+          @dataclass(frozen=True)
+          class PositionUpdate:
+              new_x: float
+              timestamp: datetime
+        contract: |
+          Frozen dataclass — PositionUpdate is a read-only event payload, never mutated
+          after construction. timestamp MUST be timezone-aware (constructed via
+          datetime.now(timezone.utc) by emitters), not naive.
+      verification:
+        node: |
+          - PositionUpdate is a frozen dataclass (attempting to set new_x after
+            construction raises FrozenInstanceError)
+      docs: |
+        - Shared event-payload type. Every emitter/listener of position_updated
+          imports this from app.schemas, same pattern as jwt_provider's TokenPayload.
+
+    position_slider:
+      kind: widget
+      defines: "A slider that lets the user set position"
+      tier: 2
+      composed_of: [position_value, position_event]
+      emit: [position_updated]
+      spec:
+        interface: |
+          from __future__ import annotations
+          from collections.abc import Callable
+          from app.schemas import PositionUpdate
+
+          class PositionSlider:
+              def __init__(self) -> None: ...
+              @property
+              def value(self) -> float: ...
+              def subscribe(self, listener: Callable[[PositionUpdate], None]) -> None: ...
+              def set_position(self, x: float) -> None: ...
+        contract: |
+          set_position(x) updates the internal value, constructs a PositionUpdate with
+          new_x=x and timestamp=datetime.now(timezone.utc) (timezone-aware), and calls
+          every subscribed listener synchronously with that event, in subscription order.
+          subscribe(listener) appends to the internal listener list; does not deduplicate.
+          value property returns the current position without side effects.
+          This is the ONLY class that should ever construct a PositionUpdate — it is the
+          sole emitter of position_updated (see comment below).
+        constraints: |
+          Only emitter of position_updated. No other component should emit
+          this event directly.
+      verification:
+        node: |
+          - subscribing a listener then calling set_position invokes the listener exactly
+            once with a PositionUpdate whose new_x matches the value passed to set_position
+          - value reflects the most recent set_position call
+          - two subscribed listeners are both invoked on one set_position call
+      docs: |
+        - Only emitter of position_updated. No other component should emit
+          this event directly.
+
+    velocity_calculator:
+      kind: module
+      defines: "Computes velocity from successive position samples"
+      tier: 2
+      composed_of: [position_value]
+      ports:
+        calculate:
+          signature: "(x: float, dt: float) -> float"
+          kind: call
+          direction: out
+      spec:
+        interface: |
+          from __future__ import annotations
+
+          class VelocityCalculator:
+              def __init__(self) -> None: ...
+              def calculate(self, x: float, dt: float) -> float: ...
+        contract: |
+          Stateful: calculate(x, dt) remembers the previous x passed to it (starting at
+          None). On the first call, returns 0.0 (no prior sample to diff against) and
+          records x as the last sample. On every subsequent call, returns
+          (x - last_x) / dt, then updates last_x to the new x.
+          Raises ValueError if dt <= 0 — a non-positive time delta is a caller bug, not
+          something to silently divide by.
+      verification:
+        node: |
+          - first call to calculate returns 0.0 regardless of x
+          - calculate(10.0, 2.0) after calculate(4.0, 2.0) returns 3.0 (i.e. (10-4)/2)
+          - calculate with dt=0 or a negative dt raises ValueError
+        edge: |
+          - calculate's returned type is always float, matching the port signature above
+
+    velocity_graph:
+      kind: widget
+      defines: "A chart that visualises velocity over time"
+      tier: 3
+      depends_on: [velocity_calculator]
+      composed_of: [position_event]
+      listen:
+        - event: position_updated
+          handle: redraw_curve
+          optional: false
+          comment: |
+            The velocity graph must redraw whenever position changes.
+      spec:
+        interface: |
+          from __future__ import annotations
+          from app.calculator import VelocityCalculator
+          from app.schemas import PositionUpdate
+
+          class VelocityGraph:
+              def __init__(self, calculator: VelocityCalculator, dt: float = 1.0) -> None: ...
+              def redraw_curve(self, event: PositionUpdate) -> None: ...
+        contract: |
+          __init__ stores the given VelocityCalculator instance and dt (default 1.0),
+          and initializes an empty `history: list[tuple[datetime, float]]` attribute.
+          redraw_curve(event) calls self's stored calculator's calculate(event.new_x,
+          self's stored dt) to get the velocity, then appends (event.timestamp, velocity)
+          to history. Does not return anything (None).
+      verification:
+        node: |
+          - calling redraw_curve with a PositionUpdate appends exactly one
+            (timestamp, velocity) tuple to history
+          - the appended velocity matches what the stored VelocityCalculator.calculate
+            would return for that event's new_x
+        edge: |
+          - VelocityGraph never constructs its own VelocityCalculator; it is always
+            passed one via __init__ (dependency injection, not internal instantiation)
+
+    audit_logger:
+      kind: service
+      defines: "Logs all position changes for debugging"
+      tier: 2
+      composed_of: [position_event]
+      listen:
+        - event: position_updated
+          handle: log_position_change
+          optional: true
+          comment: |
+            Audit logging is optional. The simulator functions correctly
+            without it.
+      spec:
+        interface: |
+          from __future__ import annotations
+          from app.schemas import PositionUpdate
+
+          class AuditLogger:
+              def __init__(self) -> None: ...
+              def log_position_change(self, event: PositionUpdate) -> None: ...
+        contract: |
+          __init__ initializes an empty `log: list[PositionUpdate]` attribute.
+          log_position_change(event) appends the event to log, unmodified. Does not
+          return anything (None). No filtering, no deduplication — every call appends.
+      verification:
+        node: |
+          - calling log_position_change with a PositionUpdate appends exactly that event
+            (by equality) to log
+          - log starts empty on construction
+      docs: |
+        - Audit logging is optional. The simulator functions correctly without it.
+
+    requirements:
+      kind: doc
+      defines: "requirements.txt: pinned pip dependencies for this component"
+      composed_of: [python]
+      tier: 1
+      spec:
+        interface: |
+          Output: requirements.txt at the component root (NOT under app/) — plain pip
+          requirements format, one package per line, not Python code.
+        contract: |
+          This component uses only the Python standard library (dataclasses, datetime,
+          collections.abc) — no third-party runtime dependency. List only the dev/test
+          tool needed to run this component's test suite: pytest, with a minimum-version
+          pin (>=). One package per line, e.g. `pytest>=8.0.0`. No comments, no section
+          headers, no pip install command — just the requirements.txt file content itself.
+      verification:
+        node: |
+          - requirements.txt exists at component root
+          - contains pytest
+      docs: |
+        - Generated early (depends only on the python primitive, not on generated code)
+          since it's a static manifest, not something that needs the implementation to
+          exist first
+        - Not verified against the code (kind: doc nodes skip compile/edge-symbol checks —
+          see spl/tools.py verify_node/verify_edges)
+
+    readme:
+      kind: doc
+      defines: "README.md: what this component does, how to install it, and its public API"
+      composed_of: [velocity_graph, audit_logger]
+      tier: 4
+      spec:
+        interface: |
+          Output: README.md at the component root (NOT under app/) — plain Markdown, not
+          code. Do NOT follow the Python code-style conventions above for this file; those
+          apply to source files only. This file is prose documentation.
+          Output ONLY the Markdown document itself — no preamble narration, no tool-call
+          syntax, no commentary before or after the document.
+        contract: |
+          Must include, as Markdown sections:
+          - Title + one-paragraph description of what this component does (reactive
+            position->velocity simulator, no web framework or GUI toolkit dependency)
+          - Prerequisites: Python version, how to install dependencies (pip install -r
+            requirements.txt)
+          - Usage: a short code example showing PositionSlider, VelocityCalculator, and
+            VelocityGraph wired together (slider.subscribe(graph.redraw_curve), then
+            slider.set_position(...))
+          - Running tests: exact command (pytest tests/)
+          - API summary: PositionSlider, VelocityCalculator, VelocityGraph, AuditLogger —
+            one line each describing their role
+        content_outline: |
+          # <Component name>
+          One paragraph description.
+          ## Prerequisites
+          ## Usage
+          ## Running tests
+          ## API
+      verification:
+        node: |
+          - README.md exists at component root
+          - contains headings for prerequisites, usage, running tests, and API
+      docs: |
+        - Generated last, after all code nodes, so it can describe the actual generated API
+        - Not verified against the code (kind: doc nodes skip compile/edge-symbol checks —
+          see spl/tools.py verify_node/verify_edges)
+
+function:
+  events:
+    position_updated:
+      schema:
+        new_x: float
+        timestamp: datetime
+      contract:
+        delivery: fire_and_forget
+        ordering: event_loop_order
+        idempotent_handler_required: false
+      comment: |
+        Emitted by the position slider synchronously on every set_position call.
+
+  emitters:
+    - from: position_slider
+      event: position_updated
+
+  listeners:
+    - node: velocity_graph
+      event: position_updated
+      handle: redraw_curve
+      optional: false
+    - node: audit_logger
+      event: position_updated
+      handle: log_position_change
+      optional: true
+
+  calls:
+    - id: graph_uses_calculator
+      from: velocity_graph.redraw_curve
+      to: velocity_calculator.calculate
+      contract:
+        consumer_requires: "(x: float, dt: float) -> float"
+        provider_guarantees: "(x: float, dt: float) -> float"
+
+  exports:
+    - name: calculate_velocity
+      kind: port
+      from: velocity_calculator.calculate
+      signature: "(x: float, dt: float) -> float"
+    - name: on_position_update
+      kind: event
+      from: position_updated
+
+verification:
+  - node: position_event
+    backend: pytest
+    tests: tests/test_schemas.py
+  - node: position_slider
+    backend: pytest
+    tests: tests/test_slider.py
+  - node: velocity_calculator
+    backend: pytest
+    tests: tests/test_velocity_calculator.py
+  - node: velocity_graph
+    backend: pytest
+    tests: tests/test_velocity_graph.py
+  - node: audit_logger
+    backend: pytest
+    tests: tests/test_audit_logger.py
+  - event: position_updated
+    check: schema_compatibility
+  - event: position_updated
+    check: no_deadlock
+    max_depth: 10
+    comment: |
+      This event's redraw_curve/log_position_change handlers are pure, synchronous,
+      side-effect-free-beyond-their-own-state functions — no risk of re-entrant emission
+      back into position_updated, so the bound below is a formality, not a live cycle.

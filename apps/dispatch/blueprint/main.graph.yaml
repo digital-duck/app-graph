@@ -1,0 +1,266 @@
+# ── Unified Duality Graph Schema v2.1 — Integrated Profile (Graph of Graphs) ─
+# Migrated from graph-driven-workflow/apps/SPL/dispatch/system.yaml
+#
+# Backend-only app (no frontend component) — still uses `imports:` with a
+# single entry, so build_app.spl/integrate_system.spl (both generic over any
+# number of imported components, see docs/DEV/BUILD/README.md §12) work
+# unmodified. `main.graph.yaml`'s job here is thinner than apps/todo/'s: no
+# cross-component contract to verify (there is only one component), just the
+# system-level `applications:` view of the same backend's routes.
+domain: software/apps/dispatch
+target_languages: [python]
+comment: |
+  Incident management core: reference data (priorities, severities, incident
+  types) plus incident CRUD with 3 foreign-key relationships and status-based
+  filtering. Backend-only — no frontend component, unlike apps/todo/.
+capstone: manage_incidents
+
+# Source of truth for id/version/domain_type — see
+# docs/DEV/BUILD/refactoring-plan-v1.md §1.1.
+blueprint:
+  id: dispatch_app
+  schema_version: "2.2"
+  graph_schema_version: "2.1"
+  domain_type: integrated
+  provenance: authored
+  parent_blueprint: null
+  lineage: []
+
+imports:
+  - id: backend
+    graph: ./backend.graph.yaml
+    comment: |
+      FastAPI REST API at :8006, OpenAPI schema at /docs, CORS open (no
+      frontend origin to allow-list). The only component — this app has no
+      frontend, unlike apps/todo/main.graph.yaml's backend+frontend pair.
+
+# ── Port configuration (system-level, orchestration metadata) ────────────────
+# Single source of truth, same convention as apps/todo/blueprint/main.graph.yaml's
+# ports: block; checked against backend.graph.yaml's own `port:` field by
+# spl/tools.py's check_port_consistency() via integrate_system.spl.
+ports:
+  backend: ${{ settings.BACKEND_FASTAPI_PORT }}
+
+form:
+  nodes:
+    dispatch_app_shell:
+      kind: component
+      defines: "System integration shell: the backend API, exposed standalone (no frontend to compose with)"
+      tier: 1
+      depends_on: [backend]
+
+    readme:
+      kind: doc
+      defines: "README.md: product-level overview, setup, and run instructions for the whole dispatch app"
+      composed_of: [dispatch_app_shell]
+      tier: 2
+      spec:
+        interface: |
+          Output: README.md at the system root (the same directory as this graph.yaml, or
+          --output_dir when integrate_system.spl was run with one) — plain Markdown, not code.
+        contract: |
+          Must include, as Markdown sections:
+          - Title + one-paragraph description (incident management core: reference data +
+            incident CRUD with FK relationships)
+          - Architecture: single FastAPI backend at :8006, no frontend — one sentence, link to
+            the backend's own README.md for its own setup/run/test instructions
+          - Running the full system: build it (`spl3 run spl/build_app.spl ...`), then start
+            the backend
+          - Applications: one line per application from this graph's `applications:` block
+        content_outline: |
+          # <App name>
+          One paragraph description.
+          ## Architecture
+          ## Running the full system
+          ## Applications
+      verification:
+        node: |
+          - README.md exists at the system root
+          - contains headings for architecture, running the full system, and applications
+      docs: |
+        - Same convention as apps/todo/blueprint/main.graph.yaml's readme node — generated
+          last by integrate_system.spl with real pass/fail results embedded
+
+function:
+  exports:
+    - name: manage_incidents
+      kind: port
+      from: dispatch_app_shell.main
+      signature: "() -> void"
+      comment: |
+        Single entry point. Serves the backend API. The system capstone — every
+        node in the backend component graph exists in service of this workflow.
+
+# ── System-level applications ────────────────────────────────────────────────
+# All single-component here (only `backend` to draw from) — unlike apps/todo/,
+# where every application spans backend + frontend. Still declared at the
+# system level, not folded into backend.graph.yaml's own verification, to
+# match the established applications: convention and keep the acceptance-test
+# generation path (integrate_system.spl's system_applications()) identical
+# across both apps.
+applications:
+
+  manage_priorities:
+    defines: |
+      - Full CRUD lifecycle on IncidentPriority reference data
+    needs:
+      backend: [api_routes]
+    tier: 1
+    spec:
+      user_story: |
+        - As an operator I can create, list, update, and delete incident priorities
+      contract: |
+        - POST /api/v1/priorities -> 201 PriorityRead
+        - GET list, GET by id, PUT -> 200 PriorityRead (or list[PriorityRead] for the list route)
+        - DELETE -> 204
+        - 404 on missing id
+    verification: |
+      - 5 route tests pass; name uniqueness enforced at DB level
+    docs: |
+      - Reference-data resource #1 of 3
+
+  manage_severities:
+    defines: |
+      - Full CRUD lifecycle on IncidentSeverity reference data
+    needs:
+      backend: [api_routes]
+    tier: 1
+    spec:
+      user_story: |
+        - As an operator I can create, list, update, and delete incident severities
+      contract: |
+        - POST /api/v1/severities -> 201 SeverityRead
+        - GET list, GET by id, PUT -> 200 SeverityRead (or list[SeverityRead] for the list route)
+        - DELETE -> 204
+        - 404 on missing id
+    verification: |
+      - 5 route tests pass
+    docs: |
+      - Reference-data resource #2 of 3
+
+  manage_incident_types:
+    defines: |
+      - Full CRUD lifecycle on IncidentType reference data, with auto-slugified name
+    needs:
+      backend: [api_routes]
+    tier: 1
+    spec:
+      user_story: |
+        - As an operator I can create, list, update, and delete incident types
+      contract: |
+        - POST /api/v1/incident-types -> 201 IncidentTypeRead (slug auto-generated if omitted)
+        - GET list, GET by id, PUT -> 200 IncidentTypeRead (or list[IncidentTypeRead] for the list route)
+        - DELETE -> 204
+        - 404 on missing id
+    verification: |
+      - 5 route tests pass; slug present in response
+    docs: |
+      - Reference-data resource #3 of 3 — exercises slugify, the one primitive apps/todo/
+        never needed
+
+  browse_incidents:
+    defines: |
+      - List all incidents, or filter by status
+    needs:
+      backend: [api_routes]
+    tier: 1
+    spec:
+      user_story: |
+        - As a user I can see all open incidents, or filter to just one status
+      contract: |
+        - GET /api/v1/incidents -> list[IncidentRead]
+        - GET /api/v1/incidents?status=Active -> only Active incidents
+        - IncidentRead includes nested priority/severity/type
+        - Test setup fixture (creating an incident to list/filter): POST /api/v1/incidents
+          body is exactly {title, status, type_id, priority_id, severity_id} — the FK field
+          is named "type_id", NOT "incident_type_id" (that name belongs to the nested
+          IncidentRead.incident_type response field, a different thing from the request body)
+        - IncidentStatus has EXACTLY 3 valid values: "Active", "Stable", "Closed" — no other
+          value (e.g. "Resolved", "Open", "Pending") is valid; POSTing/PUTting any other
+          status string returns 422. To test filtering-out-non-Active incidents, create one
+          with status "Active" and one with status "Closed" (not an invented status).
+    verification: |
+      - GET list and GET ?status= filter tests pass
+    docs: |
+      - Read-side of the incident lifecycle
+
+  create_incident:
+    defines: |
+      - Open a new incident with type, priority, and severity references
+    needs:
+      backend: [api_routes]
+    tier: 1
+    spec:
+      user_story: |
+        - As a user I can open a new incident, referencing an existing type/priority/severity
+      contract: |
+        - POST /api/v1/incidents with type_id + priority_id + severity_id -> 201 IncidentRead
+        - 404 if any FK target is missing
+        - 422 if title is empty
+    verification: |
+      - POST 201 test + FK-missing 404 test + empty-title 422 test all pass
+    docs: |
+      - The genuinely new structural feature vs apps/todo/ — 3 FK existence checks before insert
+
+  update_incident:
+    defines: |
+      - Update an incident's status, title, or description
+    needs:
+      backend: [api_routes]
+    tier: 1
+    spec:
+      user_story: |
+        - As a user I can move an incident through its lifecycle (Active -> Stable -> Closed)
+      contract: |
+        - PUT /api/v1/incidents/{id} with a partial IncidentUpdate -> updated IncidentRead
+        - 404 if id missing
+        - status must be a valid IncidentStatus value
+        - Test setup fixture (creating an incident to update): POST /api/v1/incidents
+          body is exactly {title, status, type_id, priority_id, severity_id} — the FK field
+          is named "type_id", NOT "incident_type_id" (that name belongs to the nested
+          IncidentRead.incident_type response field, a different thing from the request body)
+    verification: |
+      - PUT 200 test + status transition test + 404 test all pass
+    docs: |
+      - Status transitions are enum-string round-trips (see backend.graph.yaml's
+        incident_crud contract: enum stored as .value, not the enum instance)
+
+  manage_incidents:
+    defines: |
+      - Full incident lifecycle — the golden path across all reference data and the
+        incident resource itself
+    needs:
+      applications: [manage_priorities, manage_severities, manage_incident_types,
+                     browse_incidents, create_incident, update_incident]
+    tier: 2
+    capstone: true
+    spec:
+      user_story: |
+        - As an operator I can set up reference data, then open and manage an incident
+          end to end
+      contract: |
+        golden path:
+          1. POST /api/v1/priorities {"name":"High","color":"red","view_order":1} -> 201
+          2. POST /api/v1/severities {"name":"SEV1","color":"red","view_order":1} -> 201
+          3. POST /api/v1/incident-types {"name":"Security"} -> 201 with slug="security"
+          4. POST /api/v1/incidents {"title":"DB breach","type_id":1,"priority_id":1,
+             "severity_id":1} -> 201 status=Active
+          5. PUT /api/v1/incidents/1 {"status":"Stable"} -> status=Stable
+          6. PUT /api/v1/incidents/1 {"status":"Closed"} -> status=Closed
+          7. GET /api/v1/incidents?status=Active -> []
+          8. GET /api/v1/incidents/1 -> {"status":"Closed","priority":{"name":"High"},...}
+    verification: |
+      - all component applications pass
+      - golden path reachable in sequence
+    docs: |
+      - The capstone — every node and every reference-data application exists in service
+        of this workflow
+
+verification:
+  - node: dispatch_app_shell
+    tool: integrate_system.spl
+    checks:
+      - CORS headers present on all backend responses
+      - all system applications pass acceptance tests against the live backend
+    docs: |
+      - README.md (product-level) — see the `readme` node above
