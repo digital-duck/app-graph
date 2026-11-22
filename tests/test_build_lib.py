@@ -211,13 +211,20 @@ def test_writes_stay_inside_the_output_folder(tmp_path):
         files.write_test_file(tmp_path, "x/../../evil", "print(1)\n")
 
 
-def test_recipes_get_this_python(monkeypatch, tmp_path):
-    import os, sys
+def test_recipes_get_this_python():
+    """GraphLang runs a SOLVE's `python3` as the interpreter running the recipe, so `-m appgraph.build.tool` finds app-graph."""
+    import sys
+    from graphlang.grafr.solver import own_python
+    assert own_python(["python3", "-I", "-m", "appgraph.build.tool", "x"])[0] == sys.executable
+
+
+def test_a_component_build_writes_its_settings_config(tmp_path):
+    """build_component writes app/config.py from the app's settings.yaml (graph-code did only in build_app, so a backend
+    built on its own failed: its main.py imports app.config)."""
     from pathlib import Path
-    from appgraph import run
-    monkeypatch.setenv("PATH", "/usr/bin")
-    with run.own_python():
-        first = os.environ["PATH"].split(os.pathsep)[0]
-    assert os.environ["PATH"] == "/usr/bin"
-    if (Path(sys.executable).parent / "python3").exists():
-        assert first == str(Path(sys.executable).parent)
+    from appgraph.build import steps
+    graph = Path(__file__).parent.parent / "apps/todo/blueprint/backend.graph.yaml"
+    out = steps.settings_config(str(graph), str(tmp_path), "python_fastapi")["config"]
+    text = (tmp_path / "app/config.py").read_text()
+    assert out.endswith("app/config.py") and "FRONTEND_VITE_PORT = " in text
+    assert steps.settings_config(str(graph), str(tmp_path), "curriculum")["config"].startswith("skipped")

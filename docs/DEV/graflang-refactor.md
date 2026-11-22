@@ -215,7 +215,7 @@ outputs:  manifest, test_summary
 
 ### Upstream items for GraphLang
 
-Collected here, to raise with GraphLang (and work-graph, which needs the same):
+**Done in graflang 0.3.0 (2026-11-22), all six; app-graph and work-graph both moved onto it** (`appgraph/run.py` is now a thin layer over `graphlang.recipes`; the local `own_python`, `_OutputBudget` and `inner._adapters` workarounds are gone). The list as it was collected:
 
 1. A shared `run_recipe` helper (work-graph's `recipes.Recipe` and app-graph's `run.py` do the same job).
 2. Resolve `python3` in a SOLVE command to the running interpreter.

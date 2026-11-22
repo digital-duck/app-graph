@@ -10,7 +10,9 @@
 - **Test containers.** A test step that writes files is allowed only under your home folder or the temporary folder (a Cedar policy). Nothing from disk is mounted into a test container. The containers have no network.
 - **Prompts** are graph-code's, byte for byte, now one file each under `recipes/*/prompts/`.
 - **Docs.** README, CLAUDE.md and the User Guide are rewritten for the recipes. The User Guide corrects `extract --llm`'s repair count: the code always allowed 2 repairs, though the docs said it was fail-fast with 0.
-- New core dependencies: `graflang` and `dd-llm` (see `docs/DEV/graflang-refactor.md`); `zinet>=0.2.2`. Removed: `spl-llm`.
+- **Recipes run through GraphLang's `graphlang.recipes`** (graflang 0.3.0), shared with work-graph. With it: prompts are filled in one pass; a recipe's `python3` is the interpreter running app-graph; a node file or acceptance test whose path leaves the output folder is refused (`build.files.inside`).
+- Fixed: a component built on its own writes its app's settings config (`app/config.py`, `src/config.ts`) before its nodes. graph-code wrote it only when building the whole app, so `build apps/todo/blueprint/backend.graph.yaml` failed its tests (`No module named 'app.config'`) in both tools.
+- New core dependencies: `graflang>=0.3` and `dd-llm` (see `docs/DEV/graflang-refactor.md`); `zinet>=0.2.2`. Removed: `spl-llm`.
 
 ## 0.1.1
 

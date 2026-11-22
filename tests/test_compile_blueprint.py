@@ -153,12 +153,12 @@ def test_extract_llm_runs_the_recipe_and_resumes(tmp_path, monkeypatch):
     classifying again (the checkpoint), and a finished run leaves no checkpoint behind."""
     from click.testing import CliRunner
 
-    import appgraph.run as run_mod
+    import graphlang.recipes as gl_recipes
     from appgraph.cli import main
 
     model = Flaky(shape="SINGLE")
-    real = run_mod.make_run_llm
-    monkeypatch.setattr(run_mod, "make_run_llm", lambda llm, **kw: real(model, **kw))
+    real = gl_recipes.make_run_llm
+    monkeypatch.setattr(gl_recipes, "make_run_llm", lambda llm, **kw: real(model, **kw))
     out = tmp_path / "todo_extract"
     args = ["extract", "--repo-path", str(REPO / "tests/fixtures/todo_backend"), "--app-name", "todo_x",
             "--output-dir", str(out), "--llm", "claude_cli:claude-sonnet-5-5"]

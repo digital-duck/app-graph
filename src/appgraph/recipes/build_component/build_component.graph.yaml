@@ -62,10 +62,25 @@ steps:
   - why:     {solve: "'refused by policies/build.cedar: output_dir must be absolute and under your home or the temporary folder, and the profile one of python_fastapi, python_library, curriculum, vue_typescript (got ' + json_get(@in_plan, 'profile') + ')'", on: allowed.deny, in: {plan: prepare.plan}, out: text}
   - refused: {output: {manifest: why.text, tests: why.text, summary: why.text}, on: why, exit: refused}
 
+  # the app's settings.yaml as a config module (app/config.py, src/config.ts), which generated code imports; graph-code
+  # wrote it only when building the whole app, so a component built on its own failed its tests
+  - settings:
+      node: SOLVE
+      on: allowed.allow
+      in: {component_graph: $in.component_graph, output_dir: $in.output_dir, tech_profile: $in.tech_profile}
+      ports: [trigger, complete, in_component_graph, in_output_dir, in_tech_profile, out_config]
+      out: config
+      backend: subprocess
+      command: ["python3", "-I", "-m", "appgraph.build.tool", "settings_config"]
+      out_type: JSON
+      timeout: 60
+      risky: true
+      label: Write the settings config module
+
   # 3. one round per blueprint node, in build order
   - nodes:
       loop: "@in_n"
-      on: allowed.allow
+      on: settings
       while: "@node_index < @in_n"
       index: node_index
       in: {component_graph: $in.component_graph, tech_profile: $in.tech_profile, output_dir: $in.output_dir, use_cache: $in.use_cache, guide: guide.guide, n: n.n}
