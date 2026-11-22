@@ -60,6 +60,12 @@ where = ["src"]
 # graph-ide/frontend's node_modules/ and dist/ are deliberately excluded (npm
 # install is a separate, documented one-time step for `appgraph ide`).
 appgraph = [
+    "recipes/**/*.yaml",
+    "recipes/**/*.md",
+    "recipes/**/*.py",
+    "recipes/**/*.cedar",
+    "prompts/*.md",
+    "docker/*.Dockerfile",
     "spl/*.spl",
     "spl/*.py",
     "graph-ide/api/**/*.py",
