@@ -4,10 +4,7 @@ Written 2026-11-22, at the end of the refactor, for a manual pass the next day. 
 **works** (new behaviour) and **has not regressed** (old behaviour, compared with the pre-refactor code
 where it still exists: graph-code for app-graph, the in-code Python path for work-graph's `llm_items`).
 
-Work through the parts in order: each repo depends on the one before it
-(zinet ← graflang ← work-graph and app-graph). Every step says what to run and what you should see.
-Steps marked **[LLM]** make real, billed model calls (all capped). Steps marked **[Docker]** need Docker Desktop
-running.
+Work through the parts in order: each repo depends on the one before it (zinet ← graflang ← work-graph and app-graph). Every step says what to run and what you should see. Steps marked **[LLM]** make real, billed model calls (all capped). Steps marked **[Docker]** need Docker Desktop running.
 
 Record results in the checklist at the end.
 
@@ -25,12 +22,12 @@ pip show zinet graflang workgraph app-graph dd-llm | grep -E "^(Name|Version|Edi
 
 Expected versions:
 
-| Package | Version | Editable location |
-|---|---|---|
-| zinet | 0.2.2 | `zinet` |
-| graflang | **0.3.0** | `graflang` |
-| workgraph | 0.2.0 (CHANGELOG says "Unreleased (0.3.0)") | `work-graph` |
-| app-graph | 0.2.0 | `app-graph` |
+| Package | Version | Editable location | CLI |
+|---|---|---|---|
+| zinet | 0.2.2 | `zinet` | *zinet* |
+| graflang | **0.3.0** | `graflang` | *graf* |
+| workgraph | 0.2.0 (CHANGELOG says "Unreleased (0.3.0)") | `work-graph` | *workgraph* |
+| app-graph | 0.2.0 | `app-graph` | *appgraph* |
 
 All four were reinstalled editable after the version change, so `pip check` should say nothing about them. If graflang still shows 0.2.1, or app-graph still asks for `graflang<0.3`, run `pip install -e graflang -e app-graph -e work-graph --no-deps`. app-graph and work-graph now require `graflang>=0.3.0`.
 
@@ -100,14 +97,7 @@ python -m pytest -q                                   # the whole suite (offline
 git status --short                                    # then restore the rewritten cookbook outputs (see Setup)
 ```
 
-Expected: **1956 passed, 2 skipped, 3 failed**. The three known failures, which fail the same way without the 0.3.0 changes
-(checked with `git stash`), all need recipe folders that do not exist:
-
-- `test_cookbook_v2.py::test_every_v2_graph_validates_with_no_errors_and_no_warnings[pocketflow/pocketflow.graph.yaml]` (`cookbook_v2/pocketflow/`)
-- `test_cookbook_v2.py::test_each_port_gives_the_same_output_and_uses_the_same_number_of_model_calls[stock_copy]` (`cookbook_v2/stock_copy/`)
-- `test_cookbook_v2.py::test_the_ports_have_fewer_top_level_steps_than_their_originals_have_nodes` (the same `stock_copy`)
-
-Either restore those two folders or drop them from the test lists. Any *other* failure is a regression;
+Expected: **GL_COUNT, no failures**. Before the follow-up of 2026-11-22 there were 3 failures for folders that did not exist; `cookbook_v2/stock_copy` is now named `cookbook_v2/stock_report` in the tests (its original is still `cookbook/stock_copy`), and the `cookbook_v2/pocketflow` port was dropped (the three graphs stay in `cookbook/pocketflow/`). Any *other* failure is a regression;
 the likeliest suspects are items 2 and 3 (a cookbook recipe whose prompt relied on a value being expanded twice,
 or a command that needed a different `python3`).
 
@@ -181,6 +171,7 @@ graf vis --edit        # the app opens; Browse lists recipes; open one, Edit sho
 - [ ] `exit`/`error_code` reported for an error exit
 - [ ] `graf run` (mock) and `graf vis --edit` work as before
 - [ ] **[LLM]** `graf run cookbook/self_refine/self_refine.graph.yaml --llm claude_cli:claude-haiku-5-5` works (one real run, a few calls)
+- [ ] **[LLM]** the renamed port runs: `graf run cookbook_v2/stock_report/stock_report.graph.yaml --bind cookbook_v2/cap.bind.yaml --llm claude_cli:claude-haiku-5-5 --param tickers=AAPL --param days=5` (2 calls; the fetch needs the network)
 
 ---
 
@@ -364,7 +355,7 @@ Each is capped; together about 30–60 calls.
 - **One helper, two users.** `grep -n "graphlang.recipes" app-graph/src/appgraph/run.py work-graph/src/workgraph/recipes/__init__.py` shows both import it, and neither still has its own `python3` patch (`grep -rn "sys.executable" app-graph/src/appgraph/run.py work-graph/src/workgraph/recipes/` finds nothing).
 - **Pins.** `grep -n graflang app-graph/pyproject.toml work-graph/pyproject.toml` → `>=0.3.0` in both.
 - **Docs agree.** graflang `docs/GUIDE/USER-GUIDE.md` has "From Python: `graphlang.recipes`"; graflang `CHANGELOG.md` has 0.3.0; app-graph `docs/DEV/graflang-refactor.md` marks the six upstream items done; work-graph's `docs/DEV/graflang-refactor.md` has "After Phase 5: the shared helper".
-- **work-graph's Python floor.** work-graph says `requires-python >=3.10`, but graflang needs 3.11 (as before the refactor). Decide whether to raise work-graph's floor.
+- **Python floor.** All of graflang, app-graph and work-graph say `requires-python >=3.11` (work-graph's was 3.10 until 2026-11-22); `workgraph utils doctor` shows `[!!] python` on an older one.
 
 ## 6. Clean-up afterwards
 
@@ -379,7 +370,7 @@ git -C ~/projects/digital-duck/graflang checkout -- cookbook_pocketflow cookbook
 | Repo | Automated | By hand | LLM | Notes |
 |---|---|---|---|---|
 | zinet | ☐ 202 | ☐ | — | |
-| graflang | ☐ api 15, full 1956/3 known | ☐ probes | ☐ self_refine | known: cookbook_v2/pocketflow and stock_copy missing |
+| graflang | ☐ api 15, full suite clean | ☐ probes | ☐ self_refine, stock_report | |
 | work-graph | ☐ 125 | ☐ | ☐ items parity, ask | |
 | app-graph | ☐ 173, validate-all | ☐ commands, cache rebuild | ☐ jwt, todo app, fief, drift | |
 | cross-repo | | ☐ | | |
@@ -387,6 +378,6 @@ git -C ~/projects/digital-duck/graflang checkout -- cookbook_pocketflow cookbook
 ## Numbers recorded at hand-over (2026-11-22)
 
 - zinet: 202 passed.
-- graflang `tests/test_recipes_api.py`: 15 passed. graflang full suite (18.5 min): 1956 passed, 2 skipped, 3 failed. All three fail without the 0.3.0 changes too: they need `cookbook_v2/pocketflow/` and `cookbook_v2/stock_copy/`, which do not exist.
+- graflang `tests/test_recipes_api.py`: 15 passed. graflang full suite: GL_COUNT (before the stock_report/pocketflow follow-up: 1956 passed, 3 failed on folders that did not exist).
 - work-graph: 125 passed.
 - app-graph: 173 passed; `validate-all apps`: 47 passed, 0 failed, 10 warnings; todo backend from graph-code's cache: 22 passed, 0 calls, identical.
