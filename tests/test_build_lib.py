@@ -199,3 +199,25 @@ class TestCompile:
         assert bcompile.classification_shape("nonsense") == "NO_FIT"
         assert bcompile.classification_profile("SHAPE: SINGLE\nPROFILE: go_gin") == "go_gin"
         assert bcompile.is_known_tech_profile("python_fastapi") and not bcompile.is_known_tech_profile("go_gin")
+
+
+def test_writes_stay_inside_the_output_folder(tmp_path):
+    from appgraph.build import files
+    assert files.inside(tmp_path, "app/models.py") == (tmp_path / "app/models.py").resolve()
+    for bad in ("../x.py", "/etc/passwd", "a/../../x.py", "."):
+        assert files.inside(tmp_path, bad) is None, bad
+    import pytest
+    with pytest.raises(ValueError):
+        files.write_test_file(tmp_path, "../evil", "print(1)\n")
+
+
+def test_recipes_get_this_python(monkeypatch, tmp_path):
+    import os, sys
+    from pathlib import Path
+    from appgraph import run
+    monkeypatch.setenv("PATH", "/usr/bin")
+    with run.own_python():
+        first = os.environ["PATH"].split(os.pathsep)[0]
+    assert os.environ["PATH"] == "/usr/bin"
+    if (Path(sys.executable).parent / "python3").exists():
+        assert first == str(Path(sys.executable).parent)

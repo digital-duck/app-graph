@@ -59,7 +59,7 @@ steps:
   - extraction: {evaluate: "@in_mode == 'extraction'", on: allowed.allow, in: {mode: $in.mode}}
 
   # intent mode: one blueprint
-  - draft:   {generate: prompts.decompose_intent, on: extraction.fail, in: {intent: $in.intent, domain_type: $in.domain_type, tech_profile: $in.tech_profile}, out: yaml, label: Decompose the intent}
+  - draft:   {generate: prompts.decompose_intent, on: extraction.fail, in: {domain_type: $in.domain_type, tech_profile: $in.tech_profile, intent: $in.intent}, out: yaml, label: Decompose the intent}
   - one:     {use: parts.validate_repair, in: {candidate: draft.yaml, output_path: $in.output_path, max_repair_attempts: $in.max_repair_attempts}, out: [path, validation], ports: [invalid]}
   - one_shape: {solve: "'intent'", on: one, out: shape}
   - one_done: {output: {result: one.path, shape: one_shape.shape}, on: one_shape}
@@ -87,7 +87,7 @@ steps:
   - shape:   {solve: "json_get(@in_parsed, 'shape')", in: {parsed: parsed.parsed}, out: shape}
   - profile: {solve: "json_get(@in_parsed, 'profile')", in: {parsed: parsed.parsed}, out: profile}
   - known:   {evaluate: "json_get(@in_parsed, 'known') == TRUE", in: {parsed: parsed.parsed}}
-  - draft_profile: {generate: prompts.draft_tech_profile, on: known.fail, in: {analysis_json: $in.analysis_json, source_context: $in.source_context, profile_name: profile.profile}, out: text, label: Draft a tech profile for review}
+  - draft_profile: {generate: prompts.draft_tech_profile, on: known.fail, in: {profile_name: profile.profile, analysis_json: $in.analysis_json, source_context: $in.source_context}, out: text, label: Draft a tech profile for review}
   - profile_written:
       node: SOLVE
       in: {draft: draft_profile.text, output_dir: $in.output_dir}
@@ -102,15 +102,15 @@ steps:
 
   # INTEGRATED: backend, frontend, main
   - back_intent:  {solve: "json_get(@in_intents, 'backend')", on: integrated.pass, in: {intents: intents.intents}, out: text}
-  - back_draft:   {generate: prompts.decompose_intent, in: {intent: back_intent.text, domain_type: {value: software}, tech_profile: profile.profile}, out: yaml, label: Decompose the backend}
+  - back_draft:   {generate: prompts.decompose_intent, in: {domain_type: {value: software}, tech_profile: profile.profile, intent: back_intent.text}, out: yaml, label: Decompose the backend}
   - back_path:    {solve: "@in_dir + '/backend.graph.yaml'", in: {dir: $in.output_dir}, out: path}
   - backend:      {use: parts.validate_repair, in: {candidate: back_draft.yaml, output_path: back_path.path, settings_dir: $in.output_dir, tech_profile: profile.profile, port_settings_key: {value: BACKEND_FASTAPI_PORT}, max_repair_attempts: $in.max_repair_attempts}, out: [path, validation], ports: [invalid]}
   - front_intent: {solve: "json_get(@in_intents, 'frontend')", on: backend, in: {intents: intents.intents}, out: text}
-  - front_draft:  {generate: prompts.decompose_intent, in: {intent: front_intent.text, domain_type: {value: software}, tech_profile: {value: vue_typescript}}, out: yaml, label: Decompose the frontend}
+  - front_draft:  {generate: prompts.decompose_intent, in: {domain_type: {value: software}, tech_profile: {value: vue_typescript}, intent: front_intent.text}, out: yaml, label: Decompose the frontend}
   - front_path:   {solve: "@in_dir + '/frontend.graph.yaml'", in: {dir: $in.output_dir}, out: path}
   - frontend:     {use: parts.validate_repair, in: {candidate: front_draft.yaml, output_path: front_path.path, settings_dir: $in.output_dir, tech_profile: {value: vue_typescript}, port_settings_key: {value: FRONTEND_VITE_PORT}, max_repair_attempts: $in.max_repair_attempts}, out: [path, validation], ports: [invalid]}
   - main_intent:  {solve: "json_get(@in_intents, 'intent')", on: frontend, in: {intents: intents.intents}, out: text}
-  - main_draft:   {generate: prompts.decompose_main_graph, in: {extraction_intent: main_intent.text, app_name: $in.app_name}, out: yaml, label: Compose main.graph.yaml}
+  - main_draft:   {generate: prompts.decompose_main_graph, in: {app_name: $in.app_name, extraction_intent: main_intent.text}, out: yaml, label: Compose main.graph.yaml}
   - main_path:    {solve: "@in_dir + '/main.graph.yaml'", in: {dir: $in.output_dir}, out: path}
   - main:         {use: parts.validate_repair, in: {candidate: main_draft.yaml, output_path: main_path.path, settings_dir: $in.output_dir, max_repair_attempts: $in.max_repair_attempts}, out: [path, validation], ports: [invalid]}
   - three:        {solve: "'integrated blueprint written: ' + @in_m + ', ' + @in_b + ', ' + @in_f", on: main, in: {m: main.path, b: backend.path, f: frontend.path}, out: text}
@@ -118,7 +118,7 @@ steps:
 
   # SINGLE or NO_FIT: one blueprint against the classified profile
   - single_intent: {solve: "json_get(@in_intents, 'intent')", on: integrated.fail, in: {intents: intents.intents}, out: text}
-  - single_draft:  {generate: prompts.decompose_intent, in: {intent: single_intent.text, domain_type: {value: software}, tech_profile: profile.profile}, out: yaml, label: Decompose the app}
+  - single_draft:  {generate: prompts.decompose_intent, in: {domain_type: {value: software}, tech_profile: profile.profile, intent: single_intent.text}, out: yaml, label: Decompose the app}
   - single:        {use: parts.validate_repair, in: {candidate: single_draft.yaml, output_path: $in.output_path, settings_dir: $in.output_dir, max_repair_attempts: $in.max_repair_attempts}, out: [path, validation], ports: [invalid]}
   - single_done:   {output: {result: single.path, shape: shape.shape}, on: single}
 

@@ -88,9 +88,9 @@ steps:
         - declared: {evaluate: "json_get(@in_round, 'has_spec') == TRUE", on: hit.fail, in: {round: round.round}}
         - spec_of:  {solve: "json_get(@in_round, 'spec')", on: declared.pass, in: {round: round.round}, out: spec}
         - deps:     {solve: "json_get(@in_round, 'deps')", on: declared.fail, in: {round: round.round}, out: deps}
-        - new_spec: {generate: prompts.write_node_spec, in: {node: which.node, composed_of: deps.deps, guide: $loop.guide}, out: spec, label: Write the missing spec}
+        - new_spec: {generate: prompts.write_node_spec, in: {node: which.node, guide: $loop.guide, composed_of: deps.deps}, out: spec, label: Write the missing spec}
         - context:  {solve: "json_get(@in_round, 'context')", on: [spec_of, new_spec], in: {round: round.round}, out: context}
-        - write:    {generate: prompts.write_node, in: {node: which.node, spec: [spec_of, new_spec], context: context.context, guide: $loop.guide}, out: code, label: Write the node}
+        - write:    {generate: prompts.write_node, in: {node: which.node, guide: $loop.guide, spec: [spec_of, new_spec], context: context.context}, out: code, label: Write the node}
         - check:
             node: SOLVE
             in: {component_graph: $loop.component_graph, node: which.node, code: write.code, tech_profile: $loop.tech_profile}
@@ -103,7 +103,7 @@ steps:
             label: Node check
         - node_ok:  {evaluate: "json_get(@in_check, 'ok') == TRUE", in: {check: check.check}}
         - feedback: {solve: "json_get(@in_check, 'feedback')", on: node_ok.fail, in: {check: check.check}, out: feedback}
-        - refine:   {generate: prompts.refine_node, in: {code: write.code, feedback: feedback.feedback, guide: $loop.guide}, out: code, label: Refine after the node check}
+        - refine:   {generate: prompts.refine_node, in: {guide: $loop.guide, feedback: feedback.feedback, code: write.code}, out: code, label: Refine after the node check}
         - checked:  {solve: "@in_code", on: [node_ok.pass, refine], in: {code: [write, refine]}, out: code}
         - edges:
             node: SOLVE
@@ -117,7 +117,7 @@ steps:
             label: Edge check
         - edges_ok: {evaluate: "json_get(@in_check, 'ok') == TRUE", in: {check: edges.check}}
         - edge_feedback: {solve: "json_get(@in_check, 'feedback')", on: edges_ok.fail, in: {check: edges.check}, out: feedback}
-        - refine_edges: {generate: prompts.refine_node, in: {code: checked.code, feedback: edge_feedback.feedback, guide: $loop.guide}, out: code, label: Refine after the edge check}
+        - refine_edges: {generate: prompts.refine_node, in: {guide: $loop.guide, feedback: edge_feedback.feedback, code: checked.code}, out: code, label: Refine after the edge check}
         - final:    {solve: "@in_code", on: [edges_ok.pass, refine_edges, cached], in: {code: [checked, refine_edges, cached]}, out: code}
         - store:
             node: SOLVE
@@ -198,7 +198,7 @@ steps:
         - broken:   {solve: "json_get(@in_target, 'node')", in: {target: target.target}, out: node}
         - spec:     {solve: "json_get(@in_target, 'spec')", in: {target: target.target}, out: spec}
         - context:  {solve: "json_get(@in_target, 'context')", in: {target: target.target}, out: context}
-        - repair:   {generate: prompts.repair_node, in: {node: broken.node, spec: spec.spec, context: context.context, test_failure: output.output, guide: $loop.guide}, out: code, label: Repair the broken node}
+        - repair:   {generate: prompts.repair_node, in: {node: broken.node, guide: $loop.guide, spec: spec.spec, context: context.context, test_failure: output.output}, out: code, label: Repair the broken node}
         - write_fix:
             node: SOLVE
             in: {component_graph: $loop.component_graph, node: broken.node, code: repair.code, output_dir: $loop.output_dir, tech_profile: $loop.tech_profile}

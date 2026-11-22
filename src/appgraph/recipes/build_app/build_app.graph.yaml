@@ -143,7 +143,7 @@ steps:
         - app_id:    {solve: "json_get(@in_app, 'app')", in: {app: app.app}, out: id}
         - spec:      {solve: "json_get(@in_app, 'spec')", in: {app: app.app}, out: spec}
         - endpoints: {solve: "json_get(@in_app, 'endpoints')", in: {app: app.app}, out: endpoints}
-        - script:    {generate: prompts.write_acceptance_test, in: {application: app_id.id, spec: spec.spec, endpoints: endpoints.endpoints}, out: code, label: Write the acceptance test}
+        - script:    {generate: prompts.write_acceptance_test, in: {application: app_id.id, endpoints: endpoints.endpoints, spec: spec.spec}, out: code, label: Write the acceptance test}
         - add:
             node: SOLVE
             in: {tests: $loop.tests, app: app_id.id, code: script.code}

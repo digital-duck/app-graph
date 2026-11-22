@@ -53,7 +53,7 @@ steps:
         - failing: {evaluate: "@in_ok == FALSE", in: {ok: ok.ok}}
         - draft:   {solve: "json_get(@in_check, 'candidate')", on: failing.pass, in: {check: current.check}, out: text}
         - error:   {solve: "json_get(@in_check, 'validation')", in: {check: current.check}, out: text}
-        - fix:     {generate: prompts.repair_blueprint, in: {candidate_yaml: draft.text, validation_error: error.text}, out: candidate, label: Repair the blueprint}
+        - fix:     {generate: prompts.repair_blueprint, in: {validation_error: error.text, candidate_yaml: draft.text}, out: candidate, label: Repair the blueprint}
         - again:
             node: SOLVE
             in: {candidate: fix.candidate, settings_dir: $loop.settings_dir}

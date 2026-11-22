@@ -12,6 +12,9 @@ docs/DEV/graflang-refactor.md.
 """
 from __future__ import annotations
 
+import contextlib
+import os
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -54,6 +57,24 @@ class RecipeRun:
     @property
     def llm_calls(self) -> int:
         return int((self.summary.get("llm") or {}).get("calls") or 0)
+
+
+@contextlib.contextmanager
+def own_python():
+    """Make a recipe's `python3` this interpreter. A SOLVE subprocess finds `python3` on PATH, which can be another
+    Python than the one app-graph is installed in (conda base before the env, say); parts are loaded by the runtime,
+    so rewriting the top graph's commands would miss them. For the run, this interpreter's folder goes first on PATH.
+    (An upstream item for GraphLang: resolve `python3` to the running interpreter itself.)"""
+    here = Path(sys.executable).parent
+    old = os.environ.get("PATH", "")
+    if not (here / "python3").exists() or old.split(os.pathsep)[:1] == [str(here)]:
+        yield
+        return
+    os.environ["PATH"] = str(here) + os.pathsep + old
+    try:
+        yield
+    finally:
+        os.environ["PATH"] = old
 
 
 def recipe_path(name: str | Path) -> Path:
@@ -119,7 +140,8 @@ def run_recipe(name: str | Path, inputs: dict[str, Any], *, llm: str | Any = DEF
     if checkpoint or resume:
         runtime.checkpoint_path = Path(checkpoint or resume)
     try:
-        outputs = runtime.resume(Path(resume)) if resume else runtime.execute(inputs)
+        with own_python():
+            outputs = runtime.resume(Path(resume)) if resume else runtime.execute(inputs)
     except (ValueError, RuntimeError, NotImplementedError, CassetteError, LimitExceeded, RunLimitExceeded) as e:
         raise RecipeError(str(e), runtime.summary(), log_path) from e
     return RecipeRun(outputs, runtime.summary(), log_path)
