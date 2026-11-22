@@ -1,4 +1,5 @@
-"""Run a component's test suite inside the test container (a SOLVE node with backend: subprocess and container:).
+#!/usr/bin/env python3
+"""Run a component's test suite inside the test container (baked into appgraph-verify:py3.12 as /usr/local/bin/appgraph-run-tests).
 
 stdin   {"files": {relative path: text}, "tech_profile": "python_fastapi"}
 stdout  one line of JSON: {passed, failed, returncode, collected, no_tests, output, status, summary}

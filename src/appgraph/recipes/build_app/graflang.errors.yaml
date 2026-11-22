@@ -1,0 +1,23 @@
+# Error codes of build_app and of build_component (its part; GraphLang reads the catalogue beside the top graph, so the
+# part's codes are repeated here; tests/test_build_app.py checks the two files agree).
+errors:
+  - code: E_TESTS_FAILED
+    description: the component's test suite still fails after the repair attempts
+    cause: generated code that does not meet its spec, or a test that expects something the spec does not say
+    remedy: read the build summary's last test output; fix the blueprint's spec or raise max_test_attempts
+  - code: E_NO_TESTS
+    description: the component has no test suite to verify it with
+    cause: no tests/ folder (Python) or no package.json (Vue) in the output folder
+    remedy: seed the scaffold first (appgraph build does) or add the tests the blueprint's verification names
+  - code: E_BUILD_REFUSED
+    description: the build policy refused to write to this output folder or for this profile
+    cause: output_dir is not under your home or the temporary folder, or the profile is not one this recipe tests
+    remedy: choose an output folder under your home (or list it in APPGRAPH_WRITE_ROOTS); see policies/build.cedar
+  - code: E_COMPONENT_FAILED
+    description: a component did not build (its tests failed, it has none, or its build was refused); later components were not built
+    cause: see the component's own build summary, named in the app summary
+    remedy: fix that component (appgraph build its graph alone), then build the app again; built components come from the cache
+  - code: E_INTEGRATION_FAILED
+    description: every component built, but an acceptance test failed or the backend did not start
+    cause: generated code that passes its own tests but not the application's contract, or an acceptance script that is wrong
+    remedy: read the app summary's Integration section and the scripts saved under log_dir/acceptance-<time>/

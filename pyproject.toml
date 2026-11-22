@@ -66,6 +66,7 @@ appgraph = [
     "recipes/**/*.cedar",
     "prompts/*.md",
     "docker/*.Dockerfile",
+    "docker/*.py",
     "spl/*.spl",
     "spl/*.py",
     "graph-ide/api/**/*.py",

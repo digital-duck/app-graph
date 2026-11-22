@@ -47,8 +47,8 @@ class Model:
         self.prompts.append(prompt)
         if m := re.search(r"Generate a self-contained implementation for: (\w+)", prompt):
             return self.code[m.group(1)]
-        if "Revise the code below based on the feedback" in prompt:
-            return self.refined(prompt)
+        if "Revise the code below based on the feedback" in prompt:              # default: the code back, unchanged
+            return self.refined(prompt) if self.refined else prompt.split("CODE:\n", 1)[1].split("\n\nFEEDBACK:", 1)[0]
         if m := re.search(r"Module to repair: (\w+)", prompt):
             return self.repair(m.group(1)) if self.repair else self.code[m.group(1)]
         raise AssertionError(f"unexpected prompt: {prompt[:200]}")
@@ -141,3 +141,30 @@ def test_no_suite_ends_in_no_tests(tmp_path):
     out = tmp_path / "backend"                                         # nothing seeded: no tests/
     run = build(out, tmp_path, Model(verified_code()), use_cache=False)
     assert run.outputs["tests"].startswith("no_tests"), run.outputs
+
+
+FRONTEND_FIXTURE = HERE / "fixtures/todo_frontend"
+FRONTEND = (HERE.parent / "apps/todo/blueprint/frontend.graph.yaml").resolve()
+
+
+@needs_docker
+def test_builds_the_todo_frontend_like_graph_code(tmp_path):
+    """Vue: the scaffold (package files, tests) seeded, each node answered with graph-code's file, the suite in the
+    per-lockfile image (built on first use, needs the network once for node:22 and npm ci)."""
+    out = tmp_path / "frontend"
+    shutil.copytree(FRONTEND_FIXTURE, out, ignore=shutil.ignore_patterns("src", "README.md"))
+    code = {n: (FRONTEND_FIXTURE / blueprint.node_rel_path(FRONTEND, n)).read_text() for n in blueprint.order(FRONTEND)}
+    model = Model(code)
+    run = run_recipe("build_component", {"component_graph": str(FRONTEND), "tech_profile": "vue_typescript",
+                                         "output_dir": str(out), "log_dir": str(tmp_path / "logs"), "use_cache": False},
+                     llm=model, max_steps=3000, log_dir=None)
+    assert run.outputs["tests"].startswith("passed: 14 passed, 0 failed"), run.outputs
+    for node in blueprint.order(FRONTEND):
+        rel = blueprint.node_rel_path(FRONTEND, node)
+        assert (out / rel).read_text() == (FRONTEND_FIXTURE / rel).read_text(), rel
+    writes = [p for p in model.prompts if "Generate a self-contained implementation" in p]
+    assert len(writes) == len(blueprint.order(FRONTEND))
+    # as in graph-code: list_component imports TodoItem, but DEP_SYMBOLS knows that symbol only under the id
+    # todo_item_component, so the edge check asks for a refine that changes nothing
+    refines = [p for p in model.prompts if "Revise the code below" in p]
+    assert all("item_component" in p for p in refines)

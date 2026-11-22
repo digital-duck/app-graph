@@ -762,10 +762,10 @@ files with `# TODO:` markers. Nothing is buildable yet.
 1. Fill in `blueprint/main.graph.yaml`'s `comment:`/`applications:`
 2. Author `blueprint/backend.graph.yaml`'s data/db/orm/crud/routes nodes
 3. Author `blueprint/frontend.graph.yaml`'s api_client/component nodes
-4. Register node -> file mappings in `spl/tech_profiles.py`'s `NODE_FILES["{app_name}"]`
+4. Register node -> file mappings in `appgraph/build/tech_profiles.py`'s `NODE_FILES["{app_name}"]`
 5. `appgraph validate blueprint/main.graph.yaml`
 6. Author test files under `backend/tests/` and `frontend/tests/`
-7. `spl3 run spl/build_app.spl --tools spl/tools.py -p system_yaml=apps/{app_name}/blueprint/main.graph.yaml --llm claude_cli`
+7. `appgraph build apps/{app_name}/blueprint/main.graph.yaml` (needs Docker; see the User Guide for the test images)
 """
 
 
@@ -1213,8 +1213,8 @@ def extract(
 @click.option("--tech-profile", default=None,
               help="Tech profile for a single-component TARGET. Defaults to the "
                    "graph's own tech_profile: field; pass this to override it. "
-                   "Ignored for a system TARGET (one with imports:) — build_app.spl "
-                   "derives one per imported component automatically.")
+                   "Ignored for a system TARGET (one with imports:): each component's "
+                   "own tech_profile is used.")
 @click.option("--llm", default="claude_cli", show_default=True, help="Adapter[:model] for node generation.")
 @click.option("--llm-timeout", type=int, default=None, metavar="SECONDS", help="Per-call timeout given to the LLM adapter.")
 @click.option("--max-llm-calls", type=int, default=None,
@@ -1231,10 +1231,12 @@ def build(target: str, input_dir: Path | None, output_dir: Path | None,
     resolved under --input-dir. A target with no imports: block is one
     component, built by the build_component GraphLang recipe: each node in
     build order, checked, then the tests in a container (Docker, image
-    appgraph-verify:py3.12). A target with imports: (main.graph.yaml) still
-    runs graph-code's build_app.spl through spl3 for now.
+    appgraph-verify:py3.12; Vue: an image per lockfile). A target with
+    imports: (main.graph.yaml) is built by the build_app recipe: every
+    component in order, stopping at the first that fails, then the
+    acceptance tests against the live backend in a container, and the
+    system README.
     """
-    import subprocess
 
     target_path = Path(target)
     if target_path.exists():
@@ -1260,30 +1262,28 @@ def build(target: str, input_dir: Path | None, output_dir: Path | None,
         _build_one_component(graph_path, tech_profile, output_dir, llm, llm_timeout, max_llm_calls, max_test_attempts, not no_cache)
         return
 
-    # A system TARGET still runs graph-code's build_app.spl through spl3 until Phase 4 (docs/DEV/graflang-refactor.md).
-    cmd = [
-        _spl3_bin(), "run", str(_SPL_ROOT / "build_app.spl"),
-        "--tools", str(_SPL_ROOT / "tools.py"),
-        "--llm", llm,
-        "-p", f"system_yaml={graph_path}",
-    ]
-    if output_dir is not None:
-        cmd += ["-p", f"output_dir={output_dir.resolve()}"]
-    if llm_timeout is not None:
-        cmd += ["--llm-timeout", str(llm_timeout)]
-
+    from appgraph.builder import build_app
+    from appgraph.run import RecipeError
     click.echo(f"[build] system: {graph_path}")
-    proc = subprocess.run(
-        cmd, cwd=_workspace_root(), capture_output=True, text=True,
-        timeout=max(1800, (llm_timeout or 0) + 300),
-    )
-    click.echo(proc.stdout[-4000:])
-    if proc.returncode != 0:
-        click.echo(proc.stderr[-2000:], err=True)
-        raise click.ClickException(f"build failed (exit {proc.returncode}) — see output above")
-    _BUILD_FAILURE_MARKERS = ("Output:  FAILED", "Output:  BUILD HALTED", "Output:  BUILD FAILED")
-    if any(marker in proc.stdout for marker in _BUILD_FAILURE_MARKERS):
-        raise click.ClickException("build ran to completion but reported failure — see output above")
+
+    def progress(event: dict) -> None:
+        if event.get("type") == "GENERATE":
+            click.echo(f"  model: {event['node']} ({event.get('ms', 0)} ms)")
+
+    try:
+        result = build_app(graph_path, output_dir=output_dir, llm=llm, llm_timeout=llm_timeout, max_llm_calls=max_llm_calls,
+                           max_test_attempts=max_test_attempts, use_cache=not no_cache, on_node=progress)
+    except (RecipeError, ToolFailed) as e:
+        raise click.ClickException(f"build stopped: {e}")
+    click.echo(result.manifest)
+    click.echo(f"[build] integration:\n{result.integration}")
+    click.echo(f"[build] model calls: {result.llm_calls}")
+    if result.summary_path:
+        click.echo(f"[build] summary: {result.summary_path}")
+    if result.log_path:
+        click.echo(f"[build] log:     {result.log_path}")
+    if not result.ok:
+        raise click.ClickException(f"build {result.status}")
 
 
 def _build_one_component(graph_path: Path, tech_profile: str | None, output_dir: Path | None, llm: str,

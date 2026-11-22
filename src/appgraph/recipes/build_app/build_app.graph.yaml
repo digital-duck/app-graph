@@ -1,0 +1,245 @@
+version: "1.0-graph"
+# build_app: a system blueprint (main.graph.yaml with imports:) in, every component built and the system integration-tested
+# (graph-code's spl/build_app.spl and spl/integrate_system.spl, as one recipe).
+#   1. plan        the components in authored order, every blueprint validated before any model call; the applications
+#   2. allowed     GUARD: may it write the components, their scaffolds and config, and the README (policies/build_app.cedar)
+#   3. components  a LOOP: scaffold + settings config, then the build_component part; the first failure stops the loop
+#                  (graph-code spawned `spl3 run build_component.spl` per component; here it is one run, one call budget)
+#   4. acceptance  a LOOP: one acceptance script per application, written by the model from its spec and endpoints
+#   5. integrate   in a container with no network: the backend started on its loopback, every script run against it; the
+#                  server cannot outlive the step (graph-code started it on the host and could leak it on a crash)
+#   6. readme      the system README from the real results; the app summary; the result or an error exit
+# Run it through `appgraph build apps/<app>/blueprint/main.graph.yaml`. Paths are absolute.
+workflow:
+  name: build_app
+  description: Builds every component a system blueprint imports, in order, with the build_component part (stopping at the first that fails), then writes one acceptance script per application, runs them against the live backend in a container, and writes the system README from the results.
+  inputs:
+    - {name: system_yaml, type: TEXT, description: "absolute path of the system's main.graph.yaml"}
+    - {name: output_dir, type: TEXT, default: "", description: "absolute; empty: each component beside its blueprint/ folder"}
+    - {name: use_cache, type: BOOL, default: true}
+    - {name: max_test_attempts, type: INTEGER, default: 3}
+    - {name: log_dir, type: TEXT, description: "absolute; summaries and acceptance scripts are written here"}
+  outputs:
+    - {name: manifest, type: TEXT, description: "per component: its files and test result"}
+    - {name: integration, type: TEXT, description: "PASS/FAIL per application"}
+    - {name: status, type: TEXT, description: "passed | component_failed | integration_failed | refused"}
+    - {name: summary, type: TEXT, description: "path of the markdown app summary"}
+  errors:
+    - {name: component_failed, code: E_COMPONENT_FAILED, description: a component did not build; the rest were not built}
+    - {name: integration_failed, code: E_INTEGRATION_FAILED, description: an acceptance test failed or the backend did not start}
+    - {name: refused, code: E_BUILD_REFUSED, description: the build policy refused an output folder or a profile}
+resources:
+  parts:
+    build_component: ../build_component/build_component.graph.yaml
+  prompts:
+    write_acceptance_test: ./prompts/write_acceptance_test.md
+    write_system_readme: ./prompts/write_system_readme.md
+  policies:
+    build_app: ./policies/build_app.cedar
+
+steps:
+  - plan:
+      node: SOLVE
+      in: {system_yaml: $in.system_yaml, output_dir: $in.output_dir}
+      ports: [trigger, complete, in_system_yaml, in_output_dir, out_plan]
+      out: plan
+      backend: subprocess
+      command: ["python3", "-I", "-m", "appgraph.build.tool", "system_plan"]
+      out_type: JSON
+      timeout: 120
+      label: Components, applications; every blueprint validated
+  - n:       {solve: "json_get(@in_plan, 'n')", in: {plan: plan.plan}, out: n}
+  - allowed:
+      guard: policies.build_app
+      on: n
+      principal: 'Service::"app-graph"'
+      action: 'Action::"build_app"'
+      resource: 'Folder::"output"'
+      context_mapping: {write_ok: "json_get(@in_plan, 'write_ok')", profiles_ok: "json_get(@in_plan, 'profiles_ok')"}
+      in: {plan: plan.plan}
+  - why:     {solve: "'refused by policies/build_app.cedar: every output folder must be absolute and under your home or the temporary folder, and every component must name a known tech profile'", on: allowed.deny, out: text}
+  - refused: {output: {manifest: why.text, integration: why.text, status: why.text, summary: why.text}, on: why, exit: refused}
+
+  # 3. the components, in authored order; the first that does not pass stops the loop
+  - components:
+      loop: "@in_n"
+      on: allowed.allow
+      while: "@comp_index < @in_n AND @failed == ''"
+      index: comp_index
+      in: {system_yaml: $in.system_yaml, output_dir: $in.output_dir, use_cache: $in.use_cache, max_test_attempts: $in.max_test_attempts, log_dir: $in.log_dir, n: n.n}
+      state:
+        manifest: {from: [good_manifest.manifest, bad_manifest.manifest], init: ""}
+        failed: {from: bad.failed, init: ""}
+      steps:
+        - setup:
+            node: SOLVE
+            in: {system_yaml: $loop.system_yaml, comp_index: $loop.comp_index, output_dir: $loop.output_dir}
+            ports: [trigger, complete, in_system_yaml, in_comp_index, in_output_dir, out_setup]
+            out: setup
+            backend: subprocess
+            command: ["python3", "-I", "-m", "appgraph.build.tool", "component_setup"]
+            out_type: JSON
+            timeout: 600
+            risky: true
+            label: Scaffold and settings config for the component
+        - cid:     {solve: "json_get(@in_setup, 'id')", in: {setup: setup.setup}, out: id}
+        - graph:   {solve: "json_get(@in_setup, 'graph')", in: {setup: setup.setup}, out: graph}
+        - profile: {solve: "json_get(@in_setup, 'tech_profile')", in: {setup: setup.setup}, out: profile}
+        - out_dir: {solve: "json_get(@in_setup, 'output_dir')", in: {setup: setup.setup}, out: dir}
+        - opts:    {solve: "@in_log_dir", in: {log_dir: $loop.log_dir}, out: log_dir}                  # a part's inputs come from steps
+        - cache:   {solve: "@in_use_cache", in: {use_cache: $loop.use_cache}, out: use_cache}
+        - tries:   {solve: "@in_max_test_attempts", in: {max_test_attempts: $loop.max_test_attempts}, out: n}
+        - build:
+            use: parts.build_component
+            in: {component_graph: graph.graph, tech_profile: profile.profile, output_dir: out_dir.dir, use_cache: cache.use_cache, max_test_attempts: tries.n, log_dir: opts.log_dir}
+            out: [manifest, tests, summary]
+            ports: [tests_failed, no_tests, refused]
+        - good:
+            node: SOLVE
+            on: build
+            in: {manifest: $loop.manifest, id: cid.id, files: build.manifest, tests: build.tests}
+            ports: [trigger, complete, in_manifest, in_id, in_files, in_tests, out_note]
+            out: note
+            backend: subprocess
+            command: ["python3", "-I", "-m", "appgraph.build.tool", "note_component"]
+            out_type: JSON
+            timeout: 60
+        - good_manifest: {solve: "json_get(@in_note, 'manifest')", in: {note: good.note}, out: manifest}
+        - bad:     {solve: "@in_id + ': ' + @in_tests + ' (summary: ' + @in_summary + ')'", on: [build.tests_failed, build.no_tests, build.refused], in: {id: cid.id, tests: build.tests, summary: build.summary}, out: failed}
+        - bad_note:
+            node: SOLVE
+            on: bad
+            in: {manifest: $loop.manifest, id: cid.id, files: build.manifest, tests: build.tests, failed: {value: true}}
+            ports: [trigger, complete, in_manifest, in_id, in_files, in_tests, in_failed, out_note]
+            out: note
+            backend: subprocess
+            command: ["python3", "-I", "-m", "appgraph.build.tool", "note_component"]
+            out_type: JSON
+            timeout: 60
+        - bad_manifest: {solve: "json_get(@in_note, 'manifest')", in: {note: bad_note.note}, out: manifest}
+
+  - halted:  {evaluate: "@in_failed != ''", on: components, in: {failed: components.failed}}
+
+  # 4. one acceptance script per application (graph-code: generated and run one at a time against the live server)
+  - n_apps:  {solve: "json_get(@in_plan, 'n_apps')", on: halted.fail, in: {plan: plan.plan}, out: n}
+  - acceptance:
+      loop: "@in_n"
+      while: "@app_index < @in_n"
+      index: app_index
+      in: {system_yaml: $in.system_yaml, n: n_apps.n}
+      state:
+        tests: {from: add.tests, init: {}}
+      steps:
+        - app:
+            node: SOLVE
+            in: {system_yaml: $loop.system_yaml, app_index: $loop.app_index}
+            ports: [trigger, complete, in_system_yaml, in_app_index, out_app]
+            out: app
+            backend: subprocess
+            command: ["python3", "-I", "-m", "appgraph.build.tool", "app_round"]
+            out_type: JSON
+            timeout: 60
+            label: The application's spec and endpoints
+        - app_id:    {solve: "json_get(@in_app, 'app')", in: {app: app.app}, out: id}
+        - spec:      {solve: "json_get(@in_app, 'spec')", in: {app: app.app}, out: spec}
+        - endpoints: {solve: "json_get(@in_app, 'endpoints')", in: {app: app.app}, out: endpoints}
+        - script:    {generate: prompts.write_acceptance_test, in: {application: app_id.id, spec: spec.spec, endpoints: endpoints.endpoints}, out: code, label: Write the acceptance test}
+        - add:
+            node: SOLVE
+            in: {tests: $loop.tests, app: app_id.id, code: script.code}
+            ports: [trigger, complete, in_tests, in_app, in_code, out_tests]
+            out: tests
+            backend: subprocess
+            command: ["python3", "-I", "-m", "appgraph.build.tool", "add_test"]
+            out_type: JSON
+            timeout: 60
+
+  # 5. the integration run, in a container
+  - backend_dir: {solve: "json_get(json_get(@in_plan, 'backend'), 'output_dir')", on: acceptance, in: {plan: plan.plan}, out: dir}
+  - port:    {solve: "json_get(json_get(@in_plan, 'backend'), 'port')", in: {plan: plan.plan}, out: port}
+  - backend:
+      node: SOLVE
+      in: {output_dir: backend_dir.dir}
+      ports: [trigger, complete, in_output_dir, out_project]
+      out: project
+      backend: subprocess
+      command: ["python3", "-I", "-m", "appgraph.build.tool", "project_files"]
+      out_type: JSON
+      timeout: 60
+      label: Collect the backend's files
+  - backend_files: {solve: "json_get(@in_project, 'files')", in: {project: backend.project}, out: files}
+  - integrate:
+      node: SOLVE
+      in: {files: backend_files.files, tests: acceptance.tests, port: port.port}
+      ports: [trigger, complete, in_files, in_tests, in_port, out_result]
+      out: result
+      backend: subprocess
+      command: ["python", "/usr/local/bin/appgraph-integrate"]          # baked into the image (src/appgraph/docker/integrate.py)
+      container: {image: "appgraph-verify:py3.12", mount: none, memory_mb: 2048, cpus: 2, pids: 256}
+      parse: first_line
+      out_type: JSON
+      timeout: 900
+      risky: true
+      label: Start the backend and run the acceptance tests, in a container
+  - saved:
+      node: SOLVE
+      in: {tests: acceptance.tests, log_dir: $in.log_dir}
+      ports: [trigger, complete, in_tests, in_log_dir, out_saved]
+      out: saved
+      backend: subprocess
+      command: ["python3", "-I", "-m", "appgraph.build.tool", "save_acceptance"]
+      out_type: JSON
+      timeout: 60
+      risky: true
+      label: Keep the acceptance scripts
+  - report:  {solve: "json_get(@in_result, 'report')", in: {result: integrate.result}, out: report}
+
+  # 6. the README from the real results (written whether or not they passed, as graph-code did), then the summary
+  - readme_spec: {solve: "json_get(@in_plan, 'readme_spec')", in: {plan: plan.plan}, out: spec}
+  - readme:  {generate: prompts.write_system_readme, in: {spec: readme_spec.spec, results: report.report}, out: content, label: Write the system README}
+  - written:
+      node: SOLVE
+      in: {system_yaml: $in.system_yaml, content: readme.content, output_dir: $in.output_dir}
+      ports: [trigger, complete, in_system_yaml, in_content, in_output_dir, out_written]
+      out: written
+      backend: subprocess
+      command: ["python3", "-I", "-m", "appgraph.build.tool", "write_readme"]
+      out_type: JSON
+      timeout: 60
+      risky: true
+      label: Write the system README
+  - readme_path: {solve: "json_get(@in_written, 'path')", in: {written: written.written}, out: path}
+  - warnings: {solve: "json_get(@in_plan, 'port_warnings')", in: {plan: plan.plan}, out: text}
+  - summary:
+      node: SOLVE
+      in: {system_yaml: $in.system_yaml, manifest: components.manifest, integration: integrate.result, log_dir: $in.log_dir, readme: readme_path.path, port_warnings: warnings.text}
+      ports: [trigger, complete, in_system_yaml, in_manifest, in_integration, in_log_dir, in_readme, in_port_warnings, out_summary]
+      out: summary
+      backend: subprocess
+      command: ["python3", "-I", "-m", "appgraph.build.tool", "app_summary"]
+      out_type: JSON
+      timeout: 60
+      risky: true
+      label: Write the app summary
+  - path:    {solve: "json_get(@in_summary, 'path')", in: {summary: summary.summary}, out: path}
+  - status:  {solve: "json_get(@in_summary, 'status')", in: {summary: summary.summary}, out: status}
+  - passed:  {evaluate: "@in_status == 'passed'", in: {status: status.status}}
+  - done:    {output: {manifest: components.manifest, integration: report.report, status: status.status, summary: path.path}, on: passed.pass}
+  - integration_failed: {output: {manifest: components.manifest, integration: report.report, status: status.status, summary: path.path}, on: passed.fail, exit: integration_failed}
+
+  # the halt: a component failed; the summary says which, nothing after it was built
+  - halt_summary:
+      node: SOLVE
+      on: halted.pass
+      in: {system_yaml: $in.system_yaml, manifest: components.manifest, integration: "", log_dir: $in.log_dir, failed: components.failed}
+      ports: [trigger, complete, in_system_yaml, in_manifest, in_integration, in_log_dir, in_failed, out_summary]
+      out: summary
+      backend: subprocess
+      command: ["python3", "-I", "-m", "appgraph.build.tool", "app_summary"]
+      out_type: JSON
+      timeout: 60
+      risky: true
+      label: Write the app summary (halted)
+  - halt_path:   {solve: "json_get(@in_summary, 'path')", in: {summary: halt_summary.summary}, out: path}
+  - halt_status: {solve: "json_get(@in_summary, 'status') + ': ' + @in_failed", in: {summary: halt_summary.summary, failed: components.failed}, out: status}
+  - component_failed: {output: {manifest: components.manifest, integration: halt_status.status, status: halt_status.status, summary: halt_path.path}, on: halt_status, exit: component_failed}

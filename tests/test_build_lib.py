@@ -13,7 +13,7 @@ REPO = Path(__file__).parent.parent
 TODO = REPO / "apps/todo/blueprint"
 BACKEND = TODO / "backend.graph.yaml"
 FIXTURE = Path(__file__).parent / "fixtures/todo_backend"
-RUN_TESTS = REPO / "src/appgraph/recipes/build_component/tools/run_tests.py"
+RUN_TESTS = REPO / "src/appgraph/docker/run_tests.py"
 
 
 @pytest.fixture

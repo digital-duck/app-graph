@@ -9,7 +9,8 @@ version: "1.0-graph"
 #   5. summary   a short markdown summary in log_dir; then the result, or the error exit `tests_failed` / `no_tests`
 # Paths are absolute (the steps run in this folder). Run it through `appgraph build`, or:
 #   graf run build_component.graph.yaml --param component_graph=$PWD/apps/x/blueprint/backend.graph.yaml ...
-# The test image: docker build -t appgraph-verify:py3.12 -f src/appgraph/docker/python.Dockerfile src/appgraph/docker
+# Python tests run in this image (Vue: appgraph/build/node_image.py builds one per lockfile):
+#   docker build -t appgraph-verify:py3.12 -f src/appgraph/docker/python.Dockerfile src/appgraph/docker
 workflow:
   name: build_component
   description: Generates a component's code from its blueprint one node at a time in build order (with node and edge checks and one refinement each), then runs its tests in a container and repairs the node a failure points at, up to max_test_attempts.
@@ -58,7 +59,7 @@ steps:
       resource: 'Folder::"output"'
       context_mapping: {write_ok: "json_get(@in_plan, 'write_ok')", profile: "json_get(@in_plan, 'profile')"}
       in: {plan: prepare.plan}
-  - why:     {solve: "'refused by policies/build.cedar: output_dir must be absolute and under your home or the temporary folder, and the profile one of python_fastapi, python_library, curriculum (got ' + json_get(@in_plan, 'profile') + ')'", on: allowed.deny, in: {plan: prepare.plan}, out: text}
+  - why:     {solve: "'refused by policies/build.cedar: output_dir must be absolute and under your home or the temporary folder, and the profile one of python_fastapi, python_library, curriculum, vue_typescript (got ' + json_get(@in_plan, 'profile') + ')'", on: allowed.deny, in: {plan: prepare.plan}, out: text}
   - refused: {output: {manifest: why.text, tests: why.text, summary: why.text}, on: why, exit: refused}
 
   # 3. one round per blueprint node, in build order
@@ -139,7 +140,7 @@ steps:
       in: {component_graph: $in.component_graph, tech_profile: $in.tech_profile, output_dir: $in.output_dir, guide: guide.guide, max: $in.max_test_attempts}
       state:
         status: {from: status.status, init: "failed"}
-        result: {from: run.result, init: {}}
+        result: {from: [run.result, run_node.result], init: {}}
       steps:
         - project:
             node: SOLVE
@@ -152,22 +153,38 @@ steps:
             timeout: 60
             label: Collect the component's files
         - files:    {solve: "json_get(@in_project, 'files')", in: {project: project.project}, out: files}
+        - is_vue:   {evaluate: "@in_tech_profile == 'vue_typescript'", in: {tech_profile: $loop.tech_profile}}
+        - run_node:
+            node: SOLVE
+            on: is_vue.pass
+            in: {output_dir: $loop.output_dir}
+            ports: [trigger, complete, in_output_dir, out_result]
+            out: result
+            backend: subprocess
+            command: ["python3", "-I", "-m", "appgraph.build.tool", "run_node_tests"]
+            env_passthrough: [HOME]          # the docker client finds its context in ~/.docker; the tests never see it
+            out_type: JSON
+            timeout: 1500
+            memory_mb: 4096
+            risky: true
+            label: Run the Vue tests in a container (an image per lockfile)
         - run:
             node: SOLVE
+            on: is_vue.fail
             in: {files: files.files, tech_profile: $loop.tech_profile}
             ports: [trigger, complete, in_files, in_tech_profile, out_result]
             out: result
             backend: subprocess
-            command: ["python", "tools/run_tests.py"]               # inside the image; /work is this folder, read-only
-            container: {image: "appgraph-verify:py3.12", memory_mb: 2048, cpus: 2, pids: 256}
+            command: ["python", "/usr/local/bin/appgraph-run-tests"]     # baked into the image (src/appgraph/docker/run_tests.py)
+            container: {image: "appgraph-verify:py3.12", mount: none, memory_mb: 2048, cpus: 2, pids: 256}
             parse: first_line
             out_type: JSON
             timeout: 600
             risky: true
             label: Run the tests in a container
-        - status:   {solve: "json_get(@in_result, 'status')", in: {result: run.result}, out: status}
+        - status:   {solve: "json_get(@in_result, 'status')", on: [run, run_node], in: {result: [run, run_node]}, out: status}
         - failed:   {evaluate: "@in_status == 'failed'", in: {status: status.status}}
-        - output:   {solve: "json_get(@in_result, 'output')", on: failed.pass, in: {result: run.result}, out: output}
+        - output:   {solve: "json_get(@in_result, 'output')", on: failed.pass, in: {result: [run, run_node]}, out: output}
         - target:
             node: SOLVE
             in: {component_graph: $loop.component_graph, test_output: output.output, output_dir: $loop.output_dir}
