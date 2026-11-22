@@ -18,25 +18,11 @@ from .loader import GraphDomain, load_domain
 
 # The appgraph package directory itself — in an editable/dev install this
 # is src/appgraph/, in a real `pip install appgraph` it's the copy inside
-# site-packages/appgraph/. spl/ and graph-ide/ are shipped as package data
+# site-packages/appgraph/. graph-ide/ and recipes/ are shipped as package data
 # (see pyproject.toml's [tool.setuptools.package-data]) specifically so these
 # paths resolve the same way in both cases — no dependency on a git checkout.
 _PACKAGE_ROOT = Path(__file__).resolve().parent
-_SPL_ROOT = _PACKAGE_ROOT / "spl"
 _GRAPH_IDE_ROOT = _PACKAGE_ROOT / "graph-ide"
-
-
-def _spl3_bin() -> str:
-    """Path to the `spl3` binary sitting next to the Python interpreter
-    actually running this process (sys.executable), not a bare "spl3"
-    resolved via inherited PATH. Two environments can each have their own
-    spl-llm install (e.g. one editable/current, one a stale frozen copy);
-    a bare "spl3" picks whichever happens to be first on PATH for whatever
-    shell/service launched `appgraph`, which silently diverges from the
-    environment appgraph itself is running in. Falling back to the bare
-    name only if no sibling binary exists (e.g. an unusual install layout)."""
-    candidate = Path(sys.executable).parent / "spl3"
-    return str(candidate) if candidate.exists() else "spl3"
 
 
 def _fail(msg: str) -> None:
@@ -174,7 +160,7 @@ def validate(graph_yaml: str) -> None:
 def order(graph_yaml: str) -> None:
     """Print the topological node build order for a graph.yaml.
 
-    This is the order build_component.spl generates nodes in.
+    This is the order the build_component recipe generates nodes in.
     """
     try:
         graph = load_domain(graph_yaml)
@@ -437,7 +423,7 @@ applications: {{}}
 
 verification:
   - node: {app_name}_app_shell
-    tool: integrate_system.spl
+    tool: appgraph build (build_app recipe, integration)
     checks:
       - CORS headers present on all backend responses
       - frontend loads without console errors
@@ -848,7 +834,7 @@ def new_app(app_name: str, backend_port: int, frontend_port: int, apps_dir: str)
     click.echo(f"  1. Fill in blueprint/main.graph.yaml's comment:/applications:")
     click.echo(f"  2. Author blueprint/backend.graph.yaml's data/db/orm/crud/routes nodes")
     click.echo(f"  3. Author blueprint/frontend.graph.yaml's api_client/component nodes")
-    click.echo(f'  4. Register node -> file mappings in spl/tech_profiles.py\'s NODE_FILES["{app_name}"]')
+    click.echo(f'  4. Register node -> file mappings in appgraph/build/tech_profiles.py\'s NODE_FILES["{app_name}"]')
     click.echo(f"  5. appgraph validate {blueprint}/main.graph.yaml")
 
 
@@ -875,34 +861,33 @@ def new_app(app_name: str, backend_port: int, frontend_port: int, apps_dir: str)
 @click.option("--frontend-api-dir", default="", help="Relative path to TS API client dir")
 @click.option("--backend-port", type=int, default=8000)
 @click.option("--frontend-port", type=int, default=5173)
-@click.option("--llm", default="", help="ADAPTER:MODEL (e.g. claude_cli:claude-sonnet-4-6). "
+@click.option("--llm", default="", help="ADAPTER:MODEL (e.g. claude_cli:claude-sonnet-5-5). "
               "If set, runs a semantic pass after the AST pass: classifies the app's shape "
-              "(integrated / single-component / no fit) and calls compile_blueprint.spl to "
+              "(integrated / single-component / no fit) and runs the compile_blueprint recipe to "
               "draft real spec.interface/spec.contract content instead of TODO: stubs. "
               "Omit for AST-only extraction (unchanged, no LLM calls, no cost).")
 @click.option("--llm-timeout", type=int, default=None, metavar="SECONDS",
-              help="Per-call timeout for the --llm semantic pass, forwarded to "
-                   "`spl3 run --llm-timeout`. Adapters that don't accept a 'timeout' "
-                   "kwarg ignore it. Default is the adapter's own default "
-                   "(claude_cli: 300s, or 600s if it uses tools).")
+              help="Per-call timeout for the --llm semantic pass, given to the LLM adapter. "
+                   "Default is the adapter's own.")
+@click.option("--max-llm-calls", type=int, default=20, show_default=True,
+              help="Stop the --llm semantic pass before this many model calls (an integrated app "
+                   "with no repairs needs 5).")
 @click.option("--skip-cache", is_flag=True,
               help="Don't reuse OUTPUT_DIR/.appgraph_cache content: always re-clone "
                    "(for --repo-url), re-scan the repo, and re-run the --llm pass instead "
                    "of trusting a previous run's cached clone/AST/marker. This run still "
-                   "*writes* fresh cache entries as it goes (including --persistence "
-                   "checkpoints), so a crash partway through remains resumable on retry — "
+                   "*writes* fresh cache entries as it goes (including the --persistence "
+                   "checkpoint), so a crash partway through remains resumable on retry — "
                    "it only skips reading stale content, it doesn't disable saving.")
-@click.option("--persistence", default="sqlite", show_default=True,
-              type=click.Choice(["sqlite", "postgres", "dbos", "none"]),
-              help="Durable-execution backend forwarded to the --llm pass's `spl3 run "
-                   "--persistence ... --workflow-id ...` (checkpoints every GENERATE/CALL "
-                   "step). This is a *finer* granularity than the OUTPUT_DIR/.appgraph_cache "
-                   "marker above: the marker skips re-running compile_blueprint.spl at all "
-                   "once it has fully succeeded, while --persistence lets a run that died "
-                   "partway through (e.g. attempt 3 of a repair loop, after attempts 0-1 "
-                   "already succeeded) resume from its last checkpoint instead of redoing "
-                   "every step. Active even with --skip-cache. 'none' disables it. Ignored "
-                   "without --llm.")
+@click.option("--persistence", default="checkpoint", show_default=True,
+              type=click.Choice(["checkpoint", "sqlite", "none"]),
+              help="Resumability of the --llm pass: a GraphLang checkpoint file in "
+                   "OUTPUT_DIR/.appgraph_cache/, written after every top-level step (each "
+                   "blueprint draft), so a run that died partway resumes there instead of "
+                   "paying again for the drafts it already has; a repair loop that died "
+                   "midway restarts that loop. Finer than the marker above, which skips the "
+                   "whole pass once it has succeeded. 'sqlite' is the old name and means the "
+                   "same. 'none' disables it. Ignored without --llm.")
 def extract(
     repo_path: Path | None,
     repo_url: str | None,
@@ -919,6 +904,7 @@ def extract(
     frontend_port: int,
     llm: str,
     llm_timeout: int | None,
+    max_llm_calls: int,
     skip_cache: bool,
     persistence: str,
 ) -> None:
@@ -934,7 +920,7 @@ def extract(
     judgment is required — nothing is buildable until those are resolved and
     `appgraph validate` passes clean. With --llm: after the same AST
     pass, a semantic pass reads representative source file contents,
-    classifies the app's shape, and calls spl/compile_blueprint.spl to
+    classifies the app's shape, and runs the compile_blueprint recipe to
     produce real spec content (still only structurally validated, not a
     claim of correctness — review before building either way).
 
@@ -942,11 +928,10 @@ def extract(
     persists the cloned repo (for --repo-url), the AST-extraction results,
     and a marker for a fully-completed --llm pass — a --repo-url clone that
     takes minutes, or a repeat `extract` invocation after the --llm pass
-    already succeeded, isn't redone. Fine: the --llm pass itself runs as a
-    durable spl3 workflow (see --persistence) that checkpoints every
-    GENERATE/CALL step, so a run that dies partway through (e.g. attempt 3 of
-    a repair loop, after attempts 0-1 already got real LLM responses) resumes
-    from its last checkpoint instead of re-paying for every attempt. Pass
+    already succeeded, isn't redone. Fine: the --llm pass writes a GraphLang
+    checkpoint after every top-level step (see --persistence), so a run that
+    dies partway resumes after the last blueprint it drafted instead of
+    re-paying for it. Pass
     --skip-cache to force a fresh run at both granularities — it still writes
     (and can resume from) fresh cache/checkpoints, it just won't read stale
     ones from a previous run.
@@ -1109,7 +1094,7 @@ def extract(
     click.echo("    2. Fill EXTRACTION.md §2 (functional description) and §3 (use cases)")
     click.echo("    3. Author contracts in blueprint/*.graph.yaml (or prompt an LLM with EXTRACTION.md + analysis.json)")
     click.echo(f"    4. appgraph validate {blueprint}/main.graph.yaml")
-    click.echo("    5. Register node -> file mappings in spl/tech_profiles.py, then spl3 build")
+    click.echo("    5. Register node -> file mappings in appgraph/build/tech_profiles.py, then appgraph build")
 
     if llm:
         source_context = ex.build_source_context(repo, routes, schemas, orm_models, services, components, api_funcs)
@@ -1123,60 +1108,45 @@ def extract(
 
         if cached_files and all((out / f).exists() for f in cached_files):
             click.echo(
-                "[extract] LLM pass cache hit — compile_blueprint.spl already produced "
+                "[extract] LLM pass cache hit — compile_blueprint already produced "
                 f"{', '.join(cached_files)} for these exact inputs (llm={llm}); skipping "
                 "the LLM call. Pass --skip-cache to force a re-run."
             )
         else:
-            import subprocess
-            import uuid
+            from appgraph.run import RecipeError, run_recipe
 
-            click.echo(f"\n[extract] --llm {llm}: running semantic pass (shape classification + compile_blueprint.spl)")
-            cmd = [
-                _spl3_bin(), "run", str(_SPL_ROOT / "compile_blueprint.spl"),
-                "--tools", str(_SPL_ROOT / "tools.py"),
-                "--llm", llm,
-                "-p", "mode=extraction",
-                "-p", f"analysis_json={analysis_text}",
-                "-p", f"source_context={source_context}",
-                "-p", f"app_name={app_name}",
-                "-p", f"output_dir={blueprint}",
-                "-p", f"output_path={blueprint}/component.graph.yaml",
-                "-p", "log_dir=logs/spl",
-            ]
-            if llm_timeout is not None:
-                cmd += ["--llm-timeout", str(llm_timeout)]
-                click.echo(f"[extract] --llm-timeout {llm_timeout}s")
+            click.echo(f"\n[extract] --llm {llm}: running semantic pass (shape classification + the compile_blueprint recipe)")
+            checkpoint = None
+            resume = None
             if persistence != "none":
-                # Reuse llm_key as the workflow-id: it's already a hash of
-                # (llm, app_name, blueprint, analysis, source_context), so it
-                # naturally rotates whenever those inputs change (never
-                # resumes a checkpoint from stale/mismatched inputs) and
-                # stays stable across identical reruns (so a crashed run
-                # resumes instead of restarting at step 0). Under
-                # --skip-cache, a stable ID would instead *resume* (and
-                # silently reuse the LLM output of) a prior completed run
-                # with these same inputs — the opposite of what the flag
-                # asks for — so mint a one-off ID instead: persistence
-                # (crash-resumability) stays on for this run, it just can't
-                # collide with an earlier one.
-                workflow_id = llm_key if not skip_cache else f"{llm_key}-{uuid.uuid4().hex[:8]}"
-                cmd += ["--persistence", persistence, "--workflow-id", workflow_id]
-                click.echo(f"[extract] --persistence {persistence} --workflow-id {workflow_id}")
-            proc = subprocess.run(
-                cmd,
-                cwd=_workspace_root(), capture_output=True, text=True,
-                timeout=max(1800, (llm_timeout or 0) + 300),
-            )
-            click.echo(proc.stdout[-4000:])
-            if proc.returncode != 0:
-                click.echo(proc.stderr[-2000:], err=True)
-                raise click.ClickException(f"semantic pass failed (exit {proc.returncode}) — see output above")
-            if "Output:  FAILED" in proc.stdout:
-                raise click.ClickException(
-                    "semantic pass ran to completion but compile_blueprint.spl reported "
-                    "FAILED (structural validation did not pass) — see output above"
-                )
+                # One checkpoint file per input set (llm_key hashes llm, app, blueprint folder, analysis, source context):
+                # a run that died partway resumes from its last finished top-level step; --skip-cache starts afresh.
+                checkpoint = cache_dir / f"llm-{llm_key}.checkpoint.json"
+                if checkpoint.exists() and not skip_cache:
+                    resume = checkpoint
+                    click.echo(f"[extract] resuming the semantic pass from {checkpoint}")
+                elif checkpoint.exists():
+                    checkpoint.unlink()
+                cache_dir.mkdir(parents=True, exist_ok=True)
+            if llm_timeout is not None:
+                click.echo(f"[extract] --llm-timeout {llm_timeout}s")
+            inputs = {"mode": "extraction", "analysis_json": analysis_text, "source_context": source_context,
+                      "app_name": app_name, "output_dir": str(blueprint.resolve()),
+                      "output_path": str((blueprint / "component.graph.yaml").resolve())}
+            try:
+                run = run_recipe("compile_blueprint", inputs, llm=llm, llm_timeout=llm_timeout, max_tokens=16000,
+                                 max_llm_calls=max_llm_calls, checkpoint=checkpoint, resume=resume)
+            except RecipeError as e:
+                raise click.ClickException(f"semantic pass stopped: {e}" + (f" (resumable: run again; {checkpoint})" if checkpoint else ""))
+            result = str(run.outputs.get("result", ""))
+            click.echo(f"[extract] {result}")
+            click.echo(f"[extract] shape: {run.outputs.get('shape', '')}; model calls: {run.llm_calls}")
+            if run.log_path:
+                click.echo(f"[extract] log: {run.log_path}")
+            if checkpoint and checkpoint.exists():
+                checkpoint.unlink()                     # finished: nothing to resume
+            if result.startswith(("FAILED", "refused")) or not result:
+                raise click.ClickException(f"semantic pass did not produce a valid blueprint: {result or 'no output'}")
             click.echo("[extract] Semantic pass complete — this OVERWRITES the AST-only "
                         "blueprint/*.graph.yaml stubs written above for shapes it produces "
                         "(single-component: blueprint/component.graph.yaml only, review and "
@@ -1184,7 +1154,7 @@ def extract(
                         "Still only structurally validated, not a claim of correctness — "
                         "read the output before building. If a TECH_PROFILE_DRAFT.md was "
                         "written, it is a reviewable draft — never auto-merged into "
-                        "spl/tech_profiles.py.")
+                        "appgraph/build/tech_profiles.py.")
 
             if llm_key:
                 written = sorted(
@@ -1387,12 +1357,12 @@ def ide(api_port: int, dev_port: int, no_frontend: bool, apps_root: Path | None)
 
 
 # ---------------------------------------------------------------------------
-# tools (clean-port, spl-lint)
+# tools (clean-port, scaffold-*, suggest-graph-clusters)
 # ---------------------------------------------------------------------------
 
 @main.group()
 def tools() -> None:
-    """Small dev-utility commands (clean-port, spl-lint, scaffold-vue, scaffold-fastapi)."""
+    """Small dev-utility commands (clean-port, scaffold-vue, scaffold-fastapi, suggest-graph-clusters)."""
 
 
 @tools.command("clean-port", short_help="Kill whatever process is listening on the given port(s).")
@@ -1466,7 +1436,7 @@ def scaffold_fastapi(target_dir: Path) -> None:
     vue_typescript's `npm create vue@latest`), so this writes a hand-rolled
     minimal skeleton instead: an async-SQLAlchemy app/database.py, a
     pydantic-settings app/config.py (the Settings-singleton convention
-    documented in spl/tech_profiles.py's python_fastapi profile), an
+    documented in appgraph/build/tech_profiles.py's python_fastapi profile), an
     app/main_app.py with a lifespan-managed table-create and one /health
     route, and a real passing tests/test_health.py (pytest-asyncio) so a
     build's Stage 3 test gate has something genuine to run. Per-file
@@ -1476,111 +1446,6 @@ def scaffold_fastapi(target_dir: Path) -> None:
     """
     from appgraph.scaffolding import bootstrap_fastapi_scaffold
     click.echo(bootstrap_fastapi_scaffold(target_dir.resolve()))
-
-
-@tools.command("spl-lint", short_help="Find/fix unescaped single quotes in .spl prompt bodies.")
-@click.argument("files", nargs=-1, type=click.Path(exists=True, dir_okay=False))
-@click.option("--fix", is_flag=True, help="Rewrite files in place with '' escaping applied.")
-def spl_lint(files: tuple[str, ...], fix: bool) -> None:
-    """Find/fix unescaped single quotes in .spl CREATE FUNCTION prompt bodies.
-
-    SPL dollar-quoted strings (AS $$ ... $$) use SQL-style quote escaping —
-    a literal apostrophe must be written as '' (two single quotes), or it
-    breaks parsing for everything after it in the file. It's easy to type a
-    plain English apostrophe ("don't", "component's") inside a CREATE
-    FUNCTION prompt and forget to escape it.
-
-    Scope is deliberately narrow: only plain "AS $$ ... $$" blocks (LLM
-    prompt prose) are touched. "AS PYTHON $$ ... $$" blocks (CREATE TOOL_API
-    bodies, real executable Python where a quote is a string delimiter, not
-    an English apostrophe) are reported separately and never auto-fixed —
-    check those by eye. Defaults to spl/*.spl in the current directory when
-    no FILES are given.
-    """
-    import glob
-    import re
-
-    block_re = re.compile(r"AS\s+\$\$(.*?)\$\$", re.DOTALL)
-    python_block_re = re.compile(r"AS\s+PYTHON\s+\$\$(.*?)\$\$", re.DOTALL)
-
-    def escape_block(text: str) -> str:
-        out = []
-        i, n = 0, len(text)
-        while i < n:
-            ch = text[i]
-            if ch == "'":
-                if i + 1 < n and text[i + 1] == "'":
-                    out.append("''")
-                    i += 2
-                    continue
-                out.append("''")
-                i += 1
-                continue
-            out.append(ch)
-            i += 1
-        return "".join(out)
-
-    def lines_touched(original: str, fixed: str, block_start_line: int) -> list[int]:
-        orig_lines = original.split("\n")
-        fixed_lines = fixed.split("\n")
-        touched = []
-        for idx, (o, f) in enumerate(zip(orig_lines, fixed_lines)):
-            if o != f:
-                touched.append(block_start_line + idx)
-        return touched
-
-    def process(path: str) -> list[str]:
-        content = Path(path).read_text(encoding="utf-8")
-        issues: list[str] = []
-        new_parts = []
-        last_end = 0
-        changed = False
-
-        for m in block_re.finditer(content):
-            block = m.group(1)
-            fixed_block = escape_block(block)
-            block_start_line = content[: m.start(1)].count("\n") + 1
-            if fixed_block != block:
-                changed = True
-                for ln in lines_touched(block, fixed_block, block_start_line):
-                    issues.append(f"{path}:{ln}: unescaped single quote in $$ block")
-            new_parts.append(content[last_end : m.start(1)])
-            new_parts.append(fixed_block)
-            last_end = m.end(1)
-        new_parts.append(content[last_end:])
-        new_content = "".join(new_parts)
-
-        if fix and changed:
-            Path(path).write_text(new_content, encoding="utf-8")
-
-        for m in python_block_re.finditer(content):
-            if "'" in m.group(1).replace("''", ""):
-                start_line = content[: m.start(1)].count("\n") + 1
-                issues.append(
-                    f"{path}:{start_line}: AS PYTHON $$ block contains a single quote "
-                    "— not auto-fixed (likely real Python syntax), check by hand"
-                )
-        return issues
-
-    target_files = list(files) or sorted(glob.glob("spl/*.spl"))
-    if not target_files:
-        _fail("no .spl files found (pass file paths, or run from a directory with spl/*.spl)")
-        return
-
-    all_issues: list[str] = []
-    for path in target_files:
-        all_issues.extend(process(path))
-
-    if all_issues:
-        for issue in all_issues:
-            click.echo(issue)
-        if fix:
-            click.echo(f"\nFixed {len(all_issues)} unescaped quote(s).")
-            return
-        click.echo(f"\n{len(all_issues)} unescaped quote(s) found. Run with --fix to auto-correct.")
-        sys.exit(1)
-
-    click.echo("OK — no unescaped single quotes in $$ blocks.")
 
 
 @tools.command("suggest-graph-clusters", short_help="Suggest how to split one monolithic graph into smaller sub-graphs.")

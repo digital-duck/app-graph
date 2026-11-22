@@ -1,0 +1,10 @@
+# Error codes of compile_blueprint and its part validate_repair.
+errors:
+  - code: E_BLUEPRINT_INVALID
+    description: the drafted blueprint is still not structurally valid after the repair attempts
+    cause: YAML that does not parse, a cycle, or ids referenced but never declared as nodes
+    remedy: read the validation message; raise max_repair_attempts, or write the intent more concretely
+  - code: E_BUILD_REFUSED
+    description: the policy refused to write to this output folder
+    cause: the folder is not under your home or the temporary folder
+    remedy: choose an output folder under your home (or list it in APPGRAPH_WRITE_ROOTS)

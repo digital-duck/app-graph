@@ -1,0 +1,94 @@
+version: "1.0-graph"
+# validate_repair: a drafted blueprint is patched (component metadata), validated, repaired by the model up to
+# max_repair_attempts times while it fails, and written; or it leaves by the error exit `invalid`. Used once per
+# blueprint file by compile_blueprint.
+workflow:
+  name: validate_repair
+  description: Validates a drafted blueprint and lets the model repair it until it is structurally valid or the attempts run out, then writes it.
+  inputs:
+    - {name: candidate, type: TEXT}
+    - {name: output_path, type: TEXT}
+    - {name: settings_dir, type: TEXT, default: ""}
+    - {name: tech_profile, type: TEXT, default: ""}
+    - {name: port_settings_key, type: TEXT, default: "", description: "set for a component: tech_profile/port are added when missing"}
+    - {name: max_repair_attempts, type: INTEGER, default: 2}
+  outputs:
+    - {name: path, type: TEXT}
+    - {name: validation, type: TEXT}
+  errors:
+    - {name: invalid, code: E_BLUEPRINT_INVALID, description: still not structurally valid after the repair attempts}
+resources:
+  prompts:
+    repair_blueprint: ../prompts/repair_blueprint.md
+steps:
+  - first:
+      node: SOLVE
+      in: {candidate: $in.candidate, settings_dir: $in.settings_dir, tech_profile: $in.tech_profile, port_settings_key: $in.port_settings_key}
+      ports: [trigger, complete, in_candidate, in_settings_dir, in_tech_profile, in_port_settings_key, out_check]
+      out: check
+      backend: subprocess
+      command: ["python3", "-I", "-m", "appgraph.build.tool", "compile_check"]
+      out_type: JSON
+      timeout: 120
+      label: Validate the draft
+  - repairs:
+      loop: "@in_max"
+      while: "NOT @ok"
+      index: round
+      in: {settings_dir: $in.settings_dir, max: $in.max_repair_attempts, first: first.check}
+      state:
+        check: {from: [current.check, again.check], init: {}}
+        ok: {from: ok.ok, init: false}
+      steps:
+        - current:
+            node: SOLVE
+            in: {first: $loop.first, check: $loop.check}
+            ports: [trigger, complete, in_first, in_check, out_check]
+            out: check
+            backend: subprocess
+            command: ["python3", "-I", "-m", "appgraph.build.tool", "pick_check"]
+            out_type: JSON
+            timeout: 60
+        - ok:      {solve: "json_get(@in_check, 'ok')", in: {check: current.check}, out: ok}
+        - failing: {evaluate: "@in_ok == FALSE", in: {ok: ok.ok}}
+        - draft:   {solve: "json_get(@in_check, 'candidate')", on: failing.pass, in: {check: current.check}, out: text}
+        - error:   {solve: "json_get(@in_check, 'validation')", in: {check: current.check}, out: text}
+        - fix:     {generate: prompts.repair_blueprint, in: {candidate_yaml: draft.text, validation_error: error.text}, out: candidate, label: Repair the blueprint}
+        - again:
+            node: SOLVE
+            in: {candidate: fix.candidate, settings_dir: $loop.settings_dir}
+            ports: [trigger, complete, in_candidate, in_settings_dir, out_check]
+            out: check
+            backend: subprocess
+            command: ["python3", "-I", "-m", "appgraph.build.tool", "compile_check"]
+            out_type: JSON
+            timeout: 120
+            label: Validate the repair
+  - final:
+      on: repairs
+      node: SOLVE
+      in: {first: first.check, check: repairs.check}
+      ports: [trigger, complete, in_first, in_check, out_check]
+      out: check
+      backend: subprocess
+      command: ["python3", "-I", "-m", "appgraph.build.tool", "pick_check"]
+      out_type: JSON
+      timeout: 60
+  - valid:   {evaluate: "json_get(@in_check, 'ok') == TRUE", in: {check: final.check}}
+  - text:    {solve: "json_get(@in_check, 'candidate')", on: valid.pass, in: {check: final.check}, out: text}
+  - write:
+      node: SOLVE
+      in: {candidate: text.text, output_path: $in.output_path}
+      ports: [trigger, complete, in_candidate, in_output_path, out_written]
+      out: written
+      backend: subprocess
+      command: ["python3", "-I", "-m", "appgraph.build.tool", "write_blueprint"]
+      out_type: JSON
+      timeout: 60
+      risky: true
+      label: Write the blueprint
+  - path:    {solve: "json_get(@in_written, 'path')", in: {written: write.written}, out: path}
+  - verdict: {solve: "json_get(@in_check, 'validation')", on: path, in: {check: final.check}, out: text}
+  - done:    {output: {path: path.path, validation: verdict.text}}
+  - why:     {solve: "json_get(@in_check, 'validation')", on: valid.fail, in: {check: final.check}, out: text}
+  - invalid: {output: {path: why.text, validation: why.text}, on: why, exit: invalid}

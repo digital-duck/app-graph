@@ -21,6 +21,22 @@ DEFAULT_LLM = "claude_cli"
 LOG_DIR = Path.home() / "app-graph" / "logs"
 
 
+class _OutputBudget:
+    """Gives every model call an output budget (GraphLang's GENERATE has no setting for it; spl3 had WITH OUTPUT BUDGET)."""
+
+    def __init__(self, inner, max_tokens: int):
+        self.inner, self.max_tokens = inner, max_tokens
+
+    def __getattr__(self, attr):
+        if attr == "inner":
+            raise AttributeError(attr)
+        return getattr(self.inner, attr)
+
+    def generate(self, prompt: str, model=None, **opts):
+        opts["max_tokens"] = opts.get("max_tokens") or self.max_tokens
+        return self.inner.generate(prompt, model=model, **opts)
+
+
 class RecipeError(RuntimeError):
     """The run stopped: a limit, a failed node, a refused graph. `summary` says what it did up to then."""
 
@@ -49,7 +65,7 @@ def recipe_path(name: str | Path) -> Path:
 
 
 def make_run_llm(llm: str | Any = DEFAULT_LLM, *, max_llm_calls: Optional[int] = None, record: Optional[Path] = None,
-                 replay: Optional[Path] = None, timeout: Optional[int] = None):
+                 replay: Optional[Path] = None, timeout: Optional[int] = None, max_tokens: Optional[int] = None):
     """The run's LLM: an `ADAPTER[:MODEL]` string (dd-llm through GraphLang), or an object with `.name` and
     `.generate(prompt, model=None, **opts)` (tests pass a scripted one), wrapped in GraphLang's call meter."""
     from graphlang.grafr.adapters import make_llm
@@ -65,6 +81,8 @@ def make_run_llm(llm: str | Any = DEFAULT_LLM, *, max_llm_calls: Optional[int] =
             inner._adapters[inner.name] = inner._get_adapter(inner.name, timeout=int(timeout))
     else:
         inner = llm
+    if max_tokens:
+        inner = _OutputBudget(inner, max_tokens)
     if record:
         inner = RecordingLLM(inner, Path(record))
     return MeteredLLM(inner, max_llm_calls)
@@ -74,7 +92,7 @@ def run_recipe(name: str | Path, inputs: dict[str, Any], *, llm: str | Any = DEF
                max_steps: int = 1000, workers: int = 1, wall_time_s: Optional[float] = None, checkpoint: Optional[Path] = None,
                resume: Optional[Path] = None, record: Optional[Path] = None, replay: Optional[Path] = None,
                log_dir: Optional[Path] = LOG_DIR, log_level: str = "info", on_node: Optional[Callable[[dict], None]] = None,
-               llm_timeout: Optional[int] = None) -> RecipeRun:
+               llm_timeout: Optional[int] = None, max_tokens: Optional[int] = None) -> RecipeRun:
     """Run a recipe to its end and return its outputs. Raises RecipeError when it stops early (a model-call or step
     limit, a node that failed, a policy that refuses the graph); a run that ends at no OUTPUT returns empty outputs."""
     from graphlang.grafr.capabilities import capability_errors
@@ -95,7 +113,7 @@ def run_recipe(name: str | Path, inputs: dict[str, Any], *, llm: str | Any = DEF
     denied = capability_errors(graph_data, ResourceResolver(Path(graph_data.get("_source_dir", ".")), graph_data.get("resources")))
     if denied:
         raise RecipeError("the workflow policy does not allow this graph: " + "; ".join(denied), log_path=log_path)
-    run_llm = make_run_llm(llm, max_llm_calls=max_llm_calls, record=record, replay=replay, timeout=llm_timeout)
+    run_llm = make_run_llm(llm, max_llm_calls=max_llm_calls, record=record, replay=replay, timeout=llm_timeout, max_tokens=max_tokens)
     runtime = GraphLangRuntime(graph_data, llm=run_llm, adapter=run_llm.name, max_steps=max_steps, wall_time_s=wall_time_s,
                                workers=workers, verbose=False, node_output=None, on_node=on_node)
     if checkpoint or resume:

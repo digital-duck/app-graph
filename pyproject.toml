@@ -8,13 +8,12 @@ version = "0.2.0"
 description = "App builder over GraphLang: a blueprint graph (Unified Duality Graph Schema v2.1+) in, tested code out"
 readme = "README.md"
 license = {text = "Apache-2.0"}
-requires-python = ">=3.11"             # spl-llm and zinet need 3.11 / 3.10; 3.11 is the common floor
+requires-python = ">=3.11"             # graflang needs 3.11
 dependencies = [
     "networkx>=3.2",
     "pyyaml>=6.0",
     "click>=8.1",
     "ruamel.yaml>=0.18",
-    "spl-llm>=3.0.0",         # until Phase 5 of docs/DEV/graflang-refactor.md, then dropped
     "zinet>=0.2.2",           # the graph algorithms (order, learning path, reducibility) shared with GraphLang and work-graph
     "graflang>=0.2.1,<0.3",   # the build/compile recipes run on the GraphLang runtime (package `graphlang`)
     "dd-llm>=0.2.0",          # the LLM adapters, shared with GraphLang and work-graph
@@ -67,8 +66,6 @@ appgraph = [
     "prompts/*.md",
     "docker/*.Dockerfile",
     "docker/*.py",
-    "spl/*.spl",
-    "spl/*.py",
     "graph-ide/api/**/*.py",
     "graph-ide/frontend/src/**",
     "graph-ide/frontend/*.json",

@@ -5,14 +5,14 @@ python_fastapi (which has no equivalent official CLI; FastAPI itself ships
 no "create-fastapi-app").
 
 Used from two call sites that need the exact same behavior:
-- `spl/tools.py`'s `seed_component_scaffold` tool, automatically, the first
+- `appgraph.build.files.seed_component_scaffold` (the build_app recipe's `setup` step), automatically, the first
   time a brand-new app's component has no scaffold yet at its default
   output location (see that function's docstring).
 - `appgraph tools scaffold-vue` / `scaffold-fastapi`, for a human to run
   by hand against any target directory outside the build pipeline.
 
 Both produce just enough project shell (package.json + vitest wiring, or
-tests/ + pytest wiring) for build_component.spl's Stage 3 test gate to find
+tests/ + pytest wiring) for the build_component recipe's test gate to find
 *a* project to run `npm test` / `pytest` in — not real test files matching
 an app's actual behavior. Those still need authoring separately (Recipe-79:
 tests are the correctness certificate, so the thing being certified can't
@@ -225,7 +225,7 @@ def bootstrap_fastapi_scaffold(target_dir: Path) -> str:
     bootstrap_vue_scaffold this is a hand-rolled minimal skeleton rather than
     a wrapped official tool: an async-SQLAlchemy `app/database.py`, a
     pydantic-settings `app/config.py` (the `Settings`-singleton convention
-    documented in `spl/tech_profiles.py`'s python_fastapi profile), a
+    documented in `appgraph/build/tech_profiles.py`'s python_fastapi profile), a
     `app/main_app.py` with a lifespan-managed table-create and one `/health`
     route, and a real passing `tests/test_health.py` (pytest-asyncio) so
     Stage 3's test gate has something genuine to run. Per-file skip-if-exists

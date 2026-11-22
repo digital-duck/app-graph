@@ -658,7 +658,7 @@ def _dim_dispatch(
     across all 5 dimensions in one drift_report() call, and without knowing
     which dimension it's currently judging it can't tell "structural node
     churn" from "interface signature churn" apart (see
-    spl/compute_intent_drift.spl's prompt, which uses this to frame the
+    appgraph/prompts/intent_drift.md (the judge's prompt), which uses this to frame the
     question correctly per dimension)."""
     if mode == "jaccard":
         return _jaccard_distance(set_a, set_b)
@@ -819,7 +819,7 @@ def intent_drift(
     access of its own (see the section docstring above). Pass `judge`, a
     callable `(dimension, text_a, text_b) -> float` scoring drift in [0, 1]
     (told which dimension it's judging — see _dim_dispatch); `appgraph
-    drift --llm` supplies one backed by spl/compute_intent_drift.spl.
+    drift --llm` supplies one backed by appgraph/judge.py (one dd-llm call).
     Returns None — not 0.0 — when no judge is given in semantic mode, so
     callers can tell "unchanged" apart from "not measured".
 

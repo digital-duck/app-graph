@@ -509,7 +509,7 @@ applications:
 
 verification:
   - node: {app_name}_app_shell
-    tool: integrate_system.spl
+    tool: appgraph build (build_app recipe, integration)
     checks:
       - CORS headers present on all backend responses
       - frontend loads without console errors

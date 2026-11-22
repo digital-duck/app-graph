@@ -1,0 +1,127 @@
+version: "1.0-graph"
+# compile_blueprint: intent or static analysis in, structurally valid blueprint(s) out (graph-code's spl/compile_blueprint.spl).
+#   intent      one free-text intent -> one component blueprint (output_path)
+#   extraction  `appgraph extract --llm`: the AST pass's analysis + source samples -> classify the shape;
+#               no existing tech profile fits -> a TECH_PROFILE_DRAFT.md for review (never merged automatically);
+#               INTEGRATED -> backend, frontend and main.graph.yaml in output_dir; SINGLE or NO_FIT -> one, at output_path
+# Each blueprint goes through the validate_repair part: validate, repair up to max_repair_attempts, write. "Valid" is
+# structural only (parses, no cycle, nothing undeclared); whether it is the right blueprint is for you to judge.
+workflow:
+  name: compile_blueprint
+  description: Drafts a blueprint graph from a plain-language intent, or one to three from an existing repository's static analysis (after classifying its shape), each validated and repaired by the model until it is structurally valid.
+  inputs:
+    - {name: mode, type: TEXT, default: intent, description: "intent | extraction"}
+    - {name: intent, type: TEXT, default: ""}
+    - {name: domain_type, type: TEXT, default: software}
+    - {name: tech_profile, type: TEXT, default: python_fastapi}
+    - {name: output_path, type: TEXT, default: "", description: "absolute; the single blueprint's file"}
+    - {name: output_dir, type: TEXT, default: "", description: "absolute; extraction: the blueprint/ folder (with settings.yaml)"}
+    - {name: analysis_json, type: TEXT, default: ""}
+    - {name: source_context, type: TEXT, default: ""}
+    - {name: app_name, type: TEXT, default: build}
+    - {name: max_repair_attempts, type: INTEGER, default: 2}
+  outputs:
+    - {name: result, type: TEXT, description: "what was written, or why not"}
+    - {name: shape, type: TEXT, description: "intent | INTEGRATED | SINGLE | NO_FIT"}
+  errors:
+    - {name: invalid, code: E_BLUEPRINT_INVALID, description: a blueprint is still invalid after the repair attempts}
+    - {name: refused, code: E_BUILD_REFUSED, description: the policy refused the output folder}
+resources:
+  parts:
+    validate_repair: ./validate_repair/validate_repair.graph.yaml
+  prompts:
+    decompose_intent: ./prompts/decompose_intent.md
+    classify_shape: ./prompts/classify_shape.md
+    draft_tech_profile: ./prompts/draft_tech_profile.md
+    decompose_main_graph: ./prompts/decompose_main_graph.md
+  policies:
+    compile: ./policies/compile.cedar
+
+steps:
+  - plan:
+      node: SOLVE
+      in: {output_dir: $in.output_dir, output_path: $in.output_path}
+      ports: [trigger, complete, in_output_dir, in_output_path, out_plan]
+      out: plan
+      backend: subprocess
+      command: ["python3", "-I", "-m", "appgraph.build.tool", "compile_plan"]
+      out_type: JSON
+      timeout: 60
+  - allowed:
+      guard: policies.compile
+      principal: 'Service::"app-graph"'
+      action: 'Action::"compile_blueprint"'
+      resource: 'Folder::"output"'
+      context_mapping: {write_ok: "json_get(@in_plan, 'write_ok')"}
+      in: {plan: plan.plan}
+  - why_refused: {solve: "'refused by policies/compile.cedar: the output folder must be absolute and under your home or the temporary folder'", on: allowed.deny, out: text}
+  - refused: {output: {result: why_refused.text, shape: why_refused.text}, on: why_refused, exit: refused}
+  - extraction: {evaluate: "@in_mode == 'extraction'", on: allowed.allow, in: {mode: $in.mode}}
+
+  # intent mode: one blueprint
+  - draft:   {generate: prompts.decompose_intent, on: extraction.fail, in: {intent: $in.intent, domain_type: $in.domain_type, tech_profile: $in.tech_profile}, out: yaml, label: Decompose the intent}
+  - one:     {use: parts.validate_repair, in: {candidate: draft.yaml, output_path: $in.output_path, max_repair_attempts: $in.max_repair_attempts}, out: [path, validation], ports: [invalid]}
+  - one_shape: {solve: "'intent'", on: one, out: shape}
+  - one_done: {output: {result: one.path, shape: one_shape.shape}, on: one_shape}
+
+  # extraction mode: classify, maybe draft a profile, then one or three blueprints
+  - classify: {generate: prompts.classify_shape, on: extraction.pass, in: {analysis_json: $in.analysis_json, source_context: $in.source_context}, out: text, label: Classify the app's shape}
+  - parsed:
+      node: SOLVE
+      in: {classification: classify.text}
+      ports: [trigger, complete, in_classification, out_parsed]
+      out: parsed
+      backend: subprocess
+      command: ["python3", "-I", "-m", "appgraph.build.tool", "classify"]
+      out_type: JSON
+      timeout: 60
+  - intents:
+      node: SOLVE
+      in: {analysis_json: $in.analysis_json, source_context: $in.source_context}
+      ports: [trigger, complete, in_analysis_json, in_source_context, out_intents]
+      out: intents
+      backend: subprocess
+      command: ["python3", "-I", "-m", "appgraph.build.tool", "extraction_intents"]
+      out_type: JSON
+      timeout: 60
+  - shape:   {solve: "json_get(@in_parsed, 'shape')", in: {parsed: parsed.parsed}, out: shape}
+  - profile: {solve: "json_get(@in_parsed, 'profile')", in: {parsed: parsed.parsed}, out: profile}
+  - known:   {evaluate: "json_get(@in_parsed, 'known') == TRUE", in: {parsed: parsed.parsed}}
+  - draft_profile: {generate: prompts.draft_tech_profile, on: known.fail, in: {analysis_json: $in.analysis_json, source_context: $in.source_context, profile_name: profile.profile}, out: text, label: Draft a tech profile for review}
+  - profile_written:
+      node: SOLVE
+      in: {draft: draft_profile.text, output_dir: $in.output_dir}
+      ports: [trigger, complete, in_draft, in_output_dir, out_written]
+      out: written
+      backend: subprocess
+      command: ["python3", "-I", "-m", "appgraph.build.tool", "write_profile_draft"]
+      out_type: JSON
+      timeout: 60
+      risky: true
+  - integrated: {evaluate: "@in_shape == 'INTEGRATED'", on: [known.pass, profile_written], in: {shape: shape.shape}}
+
+  # INTEGRATED: backend, frontend, main
+  - back_intent:  {solve: "json_get(@in_intents, 'backend')", on: integrated.pass, in: {intents: intents.intents}, out: text}
+  - back_draft:   {generate: prompts.decompose_intent, in: {intent: back_intent.text, domain_type: {value: software}, tech_profile: profile.profile}, out: yaml, label: Decompose the backend}
+  - back_path:    {solve: "@in_dir + '/backend.graph.yaml'", in: {dir: $in.output_dir}, out: path}
+  - backend:      {use: parts.validate_repair, in: {candidate: back_draft.yaml, output_path: back_path.path, settings_dir: $in.output_dir, tech_profile: profile.profile, port_settings_key: {value: BACKEND_FASTAPI_PORT}, max_repair_attempts: $in.max_repair_attempts}, out: [path, validation], ports: [invalid]}
+  - front_intent: {solve: "json_get(@in_intents, 'frontend')", on: backend, in: {intents: intents.intents}, out: text}
+  - front_draft:  {generate: prompts.decompose_intent, in: {intent: front_intent.text, domain_type: {value: software}, tech_profile: {value: vue_typescript}}, out: yaml, label: Decompose the frontend}
+  - front_path:   {solve: "@in_dir + '/frontend.graph.yaml'", in: {dir: $in.output_dir}, out: path}
+  - frontend:     {use: parts.validate_repair, in: {candidate: front_draft.yaml, output_path: front_path.path, settings_dir: $in.output_dir, tech_profile: {value: vue_typescript}, port_settings_key: {value: FRONTEND_VITE_PORT}, max_repair_attempts: $in.max_repair_attempts}, out: [path, validation], ports: [invalid]}
+  - main_intent:  {solve: "json_get(@in_intents, 'intent')", on: frontend, in: {intents: intents.intents}, out: text}
+  - main_draft:   {generate: prompts.decompose_main_graph, in: {extraction_intent: main_intent.text, app_name: $in.app_name}, out: yaml, label: Compose main.graph.yaml}
+  - main_path:    {solve: "@in_dir + '/main.graph.yaml'", in: {dir: $in.output_dir}, out: path}
+  - main:         {use: parts.validate_repair, in: {candidate: main_draft.yaml, output_path: main_path.path, settings_dir: $in.output_dir, max_repair_attempts: $in.max_repair_attempts}, out: [path, validation], ports: [invalid]}
+  - three:        {solve: "'integrated blueprint written: ' + @in_m + ', ' + @in_b + ', ' + @in_f", on: main, in: {m: main.path, b: backend.path, f: frontend.path}, out: text}
+  - three_done:   {output: {result: three.text, shape: shape.shape}, on: three}
+
+  # SINGLE or NO_FIT: one blueprint against the classified profile
+  - single_intent: {solve: "json_get(@in_intents, 'intent')", on: integrated.fail, in: {intents: intents.intents}, out: text}
+  - single_draft:  {generate: prompts.decompose_intent, in: {intent: single_intent.text, domain_type: {value: software}, tech_profile: profile.profile}, out: yaml, label: Decompose the app}
+  - single:        {use: parts.validate_repair, in: {candidate: single_draft.yaml, output_path: $in.output_path, settings_dir: $in.output_dir, max_repair_attempts: $in.max_repair_attempts}, out: [path, validation], ports: [invalid]}
+  - single_done:   {output: {result: single.path, shape: shape.shape}, on: single}
+
+  # any blueprint still invalid
+  - why_invalid: {solve: "'FAILED: ' + @in_v", on: [one.invalid, backend.invalid, frontend.invalid, main.invalid, single.invalid], in: {v: [one.validation, backend.validation, frontend.validation, main.validation, single.validation]}, out: text}
+  - invalid:     {output: {result: why_invalid.text, shape: why_invalid.text}, on: why_invalid, exit: invalid}
