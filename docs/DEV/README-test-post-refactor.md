@@ -32,8 +32,7 @@ Expected versions:
 | workgraph | 0.2.0 (CHANGELOG says "Unreleased (0.3.0)") | `work-graph` |
 | app-graph | 0.2.0 | `app-graph` |
 
-If graflang still shows 0.2.1, refresh its metadata with `pip install -e graflang --no-deps`. app-graph and
-work-graph now require `graflang>=0.3.0`.
+All four were reinstalled editable after the version change, so `pip check` should say nothing about them. If graflang still shows 0.2.1, or app-graph still asks for `graflang<0.3`, run `pip install -e graflang -e app-graph -e work-graph --no-deps`. app-graph and work-graph now require `graflang>=0.3.0`.
 
 ```bash
 pip check                      # no "requires graflang>=0.3.0, but you have 0.2.1" lines
@@ -97,14 +96,18 @@ Six items, collected from app-graph's port and the Sonnet review, all done in th
 ```bash
 cd ~/projects/digital-duck/graflang
 python -m pytest -q tests/test_recipes_api.py         # the new API: 15 passed
-python -m pytest -q                                   # the whole suite (offline; about 14 min)
+python -m pytest -q                                   # the whole suite (offline; about 19 min)
 git status --short                                    # then restore the rewritten cookbook outputs (see Setup)
 ```
 
-Expected for the whole suite: see the line recorded at the end of this file ("graflang full suite").
-**Known failure, not caused by the refactor:**
-`test_cookbook_v2.py::test_every_v2_graph_validates_with_no_errors_and_no_warnings[pocketflow/pocketflow.graph.yaml]`
-(the file `cookbook_v2/pocketflow/pocketflow.graph.yaml` does not exist). Any *other* failure is a regression;
+Expected: **1956 passed, 2 skipped, 3 failed**. The three known failures, which fail the same way without the 0.3.0 changes
+(checked with `git stash`), all need recipe folders that do not exist:
+
+- `test_cookbook_v2.py::test_every_v2_graph_validates_with_no_errors_and_no_warnings[pocketflow/pocketflow.graph.yaml]` (`cookbook_v2/pocketflow/`)
+- `test_cookbook_v2.py::test_each_port_gives_the_same_output_and_uses_the_same_number_of_model_calls[stock_copy]` (`cookbook_v2/stock_copy/`)
+- `test_cookbook_v2.py::test_the_ports_have_fewer_top_level_steps_than_their_originals_have_nodes` (the same `stock_copy`)
+
+Either restore those two folders or drop them from the test lists. Any *other* failure is a regression;
 the likeliest suspects are items 2 and 3 (a cookbook recipe whose prompt relied on a value being expanded twice,
 or a command that needed a different `python3`).
 
@@ -376,7 +379,7 @@ git -C ~/projects/digital-duck/graflang checkout -- cookbook_pocketflow cookbook
 | Repo | Automated | By hand | LLM | Notes |
 |---|---|---|---|---|
 | zinet | ☐ 202 | ☐ | — | |
-| graflang | ☐ api 15, full suite | ☐ probes | ☐ self_refine | known: pocketflow.graph.yaml missing |
+| graflang | ☐ api 15, full 1956/3 known | ☐ probes | ☐ self_refine | known: cookbook_v2/pocketflow and stock_copy missing |
 | work-graph | ☐ 125 | ☐ | ☐ items parity, ask | |
 | app-graph | ☐ 173, validate-all | ☐ commands, cache rebuild | ☐ jwt, todo app, fief, drift | |
 | cross-repo | | ☐ | | |
@@ -384,6 +387,6 @@ git -C ~/projects/digital-duck/graflang checkout -- cookbook_pocketflow cookbook
 ## Numbers recorded at hand-over (2026-11-22)
 
 - zinet: 202 passed.
-- graflang `tests/test_recipes_api.py`: 15 passed. graflang full suite: GRAFLANG_RESULT
+- graflang `tests/test_recipes_api.py`: 15 passed. graflang full suite (18.5 min): 1956 passed, 2 skipped, 3 failed. All three fail without the 0.3.0 changes too: they need `cookbook_v2/pocketflow/` and `cookbook_v2/stock_copy/`, which do not exist.
 - work-graph: 125 passed.
 - app-graph: 173 passed; `validate-all apps`: 47 passed, 0 failed, 10 warnings; todo backend from graph-code's cache: 22 passed, 0 calls, identical.
