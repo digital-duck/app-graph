@@ -1216,18 +1216,23 @@ def extract(
                    "Ignored for a system TARGET (one with imports:) — build_app.spl "
                    "derives one per imported component automatically.")
 @click.option("--llm", default="claude_cli", show_default=True, help="Adapter[:model] for node generation.")
-@click.option("--llm-timeout", type=int, default=None, metavar="SECONDS",
-              help="Per-call timeout, forwarded to `spl3 run --llm-timeout`.")
+@click.option("--llm-timeout", type=int, default=None, metavar="SECONDS", help="Per-call timeout given to the LLM adapter.")
+@click.option("--max-llm-calls", type=int, default=None,
+              help="Stop the build before this many model calls. Default: 4 per blueprint node + one per test attempt + 2.")
+@click.option("--max-test-attempts", type=int, default=3, show_default=True,
+              help="Test runs (each failure gets one repair of the node it points at).")
+@click.option("--no-cache", "no_cache", is_flag=True, help="Regenerate every node instead of reusing <output>/.spl_cache.")
 def build(target: str, input_dir: Path | None, output_dir: Path | None,
-          tech_profile: str, llm: str, llm_timeout: int | None) -> None:
+          tech_profile: str, llm: str, llm_timeout: int | None, max_llm_calls: int | None,
+          max_test_attempts: int, no_cache: bool) -> None:
     """Generate code for an app or component from its blueprint.
 
     TARGET is either a direct path to a *.graph.yaml file, or an app name
-    resolved under --input-dir. A target with an imports: block (e.g.
-    main.graph.yaml) is built via build_app.spl — every imported component,
-    then integration; a target with none is built directly via
-    build_component.spl. Thin wrapper: shells out to `spl3 run` the same way
-    `appgraph extract --llm` does.
+    resolved under --input-dir. A target with no imports: block is one
+    component, built by the build_component GraphLang recipe: each node in
+    build order, checked, then the tests in a container (Docker, image
+    appgraph-verify:py3.12). A target with imports: (main.graph.yaml) still
+    runs graph-code's build_app.spl through spl3 for now.
     """
     import subprocess
 
@@ -1251,47 +1256,23 @@ def build(target: str, input_dir: Path | None, output_dir: Path | None,
         _fail(f"{graph_path}: {e}")
         return
 
-    if graph.imports:
-        cmd = [
-            _spl3_bin(), "run", str(_SPL_ROOT / "build_app.spl"),
-            "--tools", str(_SPL_ROOT / "tools.py"),
-            "--llm", llm,
-            "-p", f"system_yaml={graph_path}",
-        ]
-    else:
-        if tech_profile is not None:
-            resolved_tech_profile = tech_profile
-        else:
-            import yaml as _yaml
-            raw = _yaml.safe_load(graph_path.read_text()) or {}
-            resolved_tech_profile = raw.get("tech_profile") or "python_fastapi"
-        cmd = [
-            _spl3_bin(), "run", str(_SPL_ROOT / "build_component.spl"),
-            "--tools", str(_SPL_ROOT / "tools.py"),
-            "--llm", llm,
-            "-p", f"component_graph={graph_path}",
-            "-p", f"tech_profile={resolved_tech_profile}",
-        ]
-        if output_dir is None:
-            # build_component.spl's own @output_dir has a hardcoded
-            # DEFAULT 'backend/' (relative to spl3's cwd, _workspace_root()
-            # here) meant for build_app.spl's per-component callers, which
-            # always pass an explicit output_dir. A direct single-component
-            # TARGET (this branch) must compute the same default
-            # _component_output_dir() uses in spl/tools.py — app_root/
-            # component_id, one 'blueprint' segment stripped — or any
-            # component whose id isn't literally "backend" (e.g. this app's
-            # own frontend.graph.yaml) silently writes into
-            # ~/app-graph/backend/ instead of next to its own blueprint.
-            component_id = graph_path.name.removesuffix(".graph.yaml")
-            app_root = graph_path.parent.parent if graph_path.parent.name == "blueprint" else graph_path.parent
-            output_dir = app_root / component_id
+    if not graph.imports:
+        _build_one_component(graph_path, tech_profile, output_dir, llm, llm_timeout, max_llm_calls, max_test_attempts, not no_cache)
+        return
+
+    # A system TARGET still runs graph-code's build_app.spl through spl3 until Phase 4 (docs/DEV/graflang-refactor.md).
+    cmd = [
+        _spl3_bin(), "run", str(_SPL_ROOT / "build_app.spl"),
+        "--tools", str(_SPL_ROOT / "tools.py"),
+        "--llm", llm,
+        "-p", f"system_yaml={graph_path}",
+    ]
     if output_dir is not None:
         cmd += ["-p", f"output_dir={output_dir.resolve()}"]
     if llm_timeout is not None:
         cmd += ["--llm-timeout", str(llm_timeout)]
 
-    click.echo(f"[build] {'system' if graph.imports else 'component'}: {graph_path}")
+    click.echo(f"[build] system: {graph_path}")
     proc = subprocess.run(
         cmd, cwd=_workspace_root(), capture_output=True, text=True,
         timeout=max(1800, (llm_timeout or 0) + 300),
@@ -1303,6 +1284,36 @@ def build(target: str, input_dir: Path | None, output_dir: Path | None,
     _BUILD_FAILURE_MARKERS = ("Output:  FAILED", "Output:  BUILD HALTED", "Output:  BUILD FAILED")
     if any(marker in proc.stdout for marker in _BUILD_FAILURE_MARKERS):
         raise click.ClickException("build ran to completion but reported failure — see output above")
+
+
+def _build_one_component(graph_path: Path, tech_profile: str | None, output_dir: Path | None, llm: str,
+                         llm_timeout: int | None, max_llm_calls: int | None, max_test_attempts: int, use_cache: bool) -> None:
+    """One component through the build_component GraphLang recipe (appgraph.builder)."""
+    from appgraph.builder import build_component, default_output_dir
+    from appgraph.run import RecipeError
+    out = output_dir.resolve() if output_dir is not None else default_output_dir(graph_path)
+    click.echo(f"[build] component: {graph_path}")
+    click.echo(f"[build] output:    {out}")
+
+    def progress(event: dict) -> None:
+        if event.get("type") == "GENERATE":
+            click.echo(f"  model: {event['node']} ({event.get('ms', 0)} ms)")
+
+    try:
+        result = build_component(graph_path, tech_profile=tech_profile, output_dir=out, llm=llm, llm_timeout=llm_timeout,
+                                 max_llm_calls=max_llm_calls, max_test_attempts=max_test_attempts, use_cache=use_cache,
+                                 on_node=progress)
+    except (RecipeError, ToolFailed) as e:
+        raise click.ClickException(f"build stopped: {e}")
+    click.echo(result.manifest)
+    click.echo(f"[build] tests:   {result.tests}")
+    click.echo(f"[build] model calls: {result.llm_calls}")
+    if result.summary_path:
+        click.echo(f"[build] summary: {result.summary_path}")
+    if result.log_path:
+        click.echo(f"[build] log:     {result.log_path}")
+    if not result.ok:
+        raise click.ClickException(f"build {result.status}: {result.tests}")
 
 
 # ---------------------------------------------------------------------------

@@ -1,7 +1,8 @@
 """Run a component's test suite inside the test container (a SOLVE node with backend: subprocess and container:).
 
 stdin   {"files": {relative path: text}, "tech_profile": "python_fastapi"}
-stdout  one line of JSON: {passed, failed, returncode, collected, no_tests, output}
+stdout  one line of JSON: {passed, failed, returncode, collected, no_tests, output, status, summary}
+        (status: passed | no_tests | failed, as appgraph.build.verify.test_status)
 
 Standard library only: the image has the project's libraries, not app-graph. The project is written to a fresh folder
 under /tmp (the container's only writable place) and the suite runs there. The counting rules are
@@ -69,6 +70,17 @@ def run(files, tech_profile, timeout=300):
     return parse_test_output(proc.stdout + proc.stderr, proc.returncode)
 
 
+def with_status(result):
+    if result.get("no_tests"):
+        status = "no_tests"
+    elif result.get("returncode", 1) == 0 and result.get("failed", 1) == 0 and result.get("passed", 0) > 0:
+        status = "passed"
+    else:
+        status = "failed"
+    summary = f"{result.get('passed', 0)} passed, {result.get('failed', 0)} failed (exit {result.get('returncode', 1)})"
+    return {**result, "status": status, "summary": summary}
+
+
 if __name__ == "__main__":
     data = json.load(sys.stdin)
-    print(json.dumps(run(data.get("files") or {}, data.get("tech_profile", ""))))
+    print(json.dumps(with_status(run(data.get("files") or {}, data.get("tech_profile", "")))))

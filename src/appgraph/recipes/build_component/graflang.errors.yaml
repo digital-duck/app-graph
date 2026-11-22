@@ -1,0 +1,14 @@
+# Error codes of the build recipes (build_component, and build_app, which uses it as a part).
+errors:
+  - code: E_TESTS_FAILED
+    description: the component's test suite still fails after the repair attempts
+    cause: generated code that does not meet its spec, or a test that expects something the spec does not say
+    remedy: read the build summary's last test output; fix the blueprint's spec or raise max_test_attempts
+  - code: E_NO_TESTS
+    description: the component has no test suite to verify it with
+    cause: no tests/ folder (Python) or no package.json (Vue) in the output folder
+    remedy: seed the scaffold first (appgraph build does) or add the tests the blueprint's verification names
+  - code: E_BUILD_REFUSED
+    description: the build policy refused to write to this output folder or for this profile
+    cause: output_dir is not under your home or the temporary folder, or the profile is not one this recipe tests
+    remedy: choose an output folder under your home (or list it in APPGRAPH_WRITE_ROOTS); see policies/build.cedar

@@ -4,6 +4,7 @@
 
 - **New name: app-graph** (PyPI `app-graph`, package `appgraph`, commands `appgraph` and `agr`), continuing grafcode 0.1.1 from the graph-code repository, which stays as it was. `grafcode`/`gfc` are not installed by this package, so both can live in one environment. Work folders move from `~/graph-code/` to `~/app-graph/`; the extract cache from `.grafcode_cache/` to `.appgraph_cache/`.
 - `drift --mode semantic` calls the model through dd-llm directly (one call per dimension, the same prompt); no `spl3` subprocess. The default `--llm` is `claude_cli:claude-sonnet-5-5`.
+- **`appgraph build` of a component runs a GraphLang recipe** (`appgraph/recipes/build_component`), not `spl3`: the same prompts, checks, cache and repair loop; the tests run in a Docker container (`appgraph-verify:py3.12`, build it from `src/appgraph/docker/python.Dockerfile`); the result is `passed`, `no_tests`, `failed` or `refused`, with a markdown summary under `~/app-graph/logs/`. New options `--max-llm-calls`, `--max-test-attempts`, `--no-cache`. A node whose spec is generated now hits the cache on the next run. A system target (`imports:`) still uses `spl3` for now.
 - New core dependencies: `graflang` and `dd-llm` (the build workflows are moving onto GraphLang, see `docs/DEV/graflang-refactor.md`); `zinet>=0.2.2`.
 
 ## 0.1.1

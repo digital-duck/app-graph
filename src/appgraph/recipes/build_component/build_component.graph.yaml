@@ -1,0 +1,217 @@
+version: "1.0-graph"
+# build_component: one component blueprint in, its code written and tested (graph-code's spl/build_component.spl).
+#   1. prepare   load and validate the blueprint (a broken one stops here, before any model call), the build order
+#   2. allowed   GUARD: may it write to output_dir and test this profile (policies/build.cedar)
+#   3. nodes     a LOOP over the build order: the cache, or spec (when none is declared) -> write -> node check -> refine
+#                -> edge check -> refine; then cache and write the file
+#   4. tests     a LOOP of up to max_test_attempts: run the suite in a container (no network); on a failure find the
+#                broken node and repair it
+#   5. summary   a short markdown summary in log_dir; then the result, or the error exit `tests_failed` / `no_tests`
+# Paths are absolute (the steps run in this folder). Run it through `appgraph build`, or:
+#   graf run build_component.graph.yaml --param component_graph=$PWD/apps/x/blueprint/backend.graph.yaml ...
+# The test image: docker build -t appgraph-verify:py3.12 -f src/appgraph/docker/python.Dockerfile src/appgraph/docker
+workflow:
+  name: build_component
+  description: Generates a component's code from its blueprint one node at a time in build order (with node and edge checks and one refinement each), then runs its tests in a container and repairs the node a failure points at, up to max_test_attempts.
+  inputs:
+    - {name: component_graph, type: TEXT, description: "absolute path of the component's *.graph.yaml"}
+    - {name: tech_profile, type: TEXT, default: python_fastapi}
+    - {name: output_dir, type: TEXT, description: "absolute path; the component's files are written here"}
+    - {name: use_cache, type: BOOL, default: true}
+    - {name: max_test_attempts, type: INTEGER, default: 3}
+    - {name: log_dir, type: TEXT, description: "absolute path; the build summary is written here"}
+  outputs:
+    - {name: manifest, type: TEXT, description: "one line per node: the file written, or why it was not"}
+    - {name: tests, type: TEXT, description: "passed | no_tests | failed, with the counts"}
+    - {name: summary, type: TEXT, description: "path of the markdown build summary"}
+  errors:
+    - {name: tests_failed, code: E_TESTS_FAILED, description: the tests still fail after the repair attempts}
+    - {name: no_tests, code: E_NO_TESTS, description: the component has no test suite}
+    - {name: refused, code: E_BUILD_REFUSED, description: the build policy refused the output folder or the profile}
+resources:
+  prompts:
+    write_node_spec: ./prompts/write_node_spec.md
+    write_node: ./prompts/write_node.md
+    refine_node: ./prompts/refine_node.md
+    repair_node: ./prompts/repair_node.md
+  policies:
+    build: ./policies/build.cedar
+
+steps:
+  - prepare:
+      node: SOLVE
+      in: {component_graph: $in.component_graph, tech_profile: $in.tech_profile, output_dir: $in.output_dir}
+      ports: [trigger, complete, in_component_graph, in_tech_profile, in_output_dir, out_plan]
+      out: plan
+      backend: subprocess
+      command: ["python3", "-I", "-m", "appgraph.build.tool", "prepare"]
+      out_type: JSON
+      timeout: 60
+      label: Load and validate the blueprint; the build order
+  - n:       {solve: "json_get(@in_plan, 'n')", in: {plan: prepare.plan}, out: n}
+  - guide:   {solve: "json_get(@in_plan, 'profile_guide')", on: n, in: {plan: prepare.plan}, out: guide}
+  - allowed:
+      guard: policies.build
+      on: guide
+      principal: 'Service::"app-graph"'
+      action: 'Action::"build_component"'
+      resource: 'Folder::"output"'
+      context_mapping: {write_ok: "json_get(@in_plan, 'write_ok')", profile: "json_get(@in_plan, 'profile')"}
+      in: {plan: prepare.plan}
+  - why:     {solve: "'refused by policies/build.cedar: output_dir must be absolute and under your home or the temporary folder, and the profile one of python_fastapi, python_library, curriculum (got ' + json_get(@in_plan, 'profile') + ')'", on: allowed.deny, in: {plan: prepare.plan}, out: text}
+  - refused: {output: {manifest: why.text, tests: why.text, summary: why.text}, on: why, exit: refused}
+
+  # 3. one round per blueprint node, in build order
+  - nodes:
+      loop: "@in_n"
+      on: allowed.allow
+      while: "@node_index < @in_n"
+      index: node_index
+      in: {component_graph: $in.component_graph, tech_profile: $in.tech_profile, output_dir: $in.output_dir, use_cache: $in.use_cache, guide: guide.guide, n: n.n}
+      state:
+        manifest: {from: line.manifest, init: ""}
+      steps:
+        - round:
+            node: SOLVE
+            in: {component_graph: $loop.component_graph, node_index: $loop.node_index, output_dir: $loop.output_dir, tech_profile: $loop.tech_profile, use_cache: $loop.use_cache}
+            ports: [trigger, complete, in_component_graph, in_node_index, in_output_dir, in_tech_profile, in_use_cache, out_round]
+            out: round
+            backend: subprocess
+            command: ["python3", "-I", "-m", "appgraph.build.tool", "node_round"]
+            out_type: JSON
+            timeout: 60
+            label: The node, its spec, its dependencies' files, the cache
+        - which:    {solve: "json_get(@in_round, 'node')", in: {round: round.round}, out: node}
+        - hit:      {evaluate: "json_get(@in_round, 'hit') == TRUE", in: {round: round.round}, on: which}
+        - cached:   {solve: "json_get(@in_round, 'cached')", on: hit.pass, in: {round: round.round}, out: code}
+        - declared: {evaluate: "json_get(@in_round, 'has_spec') == TRUE", on: hit.fail, in: {round: round.round}}
+        - spec_of:  {solve: "json_get(@in_round, 'spec')", on: declared.pass, in: {round: round.round}, out: spec}
+        - deps:     {solve: "json_get(@in_round, 'deps')", on: declared.fail, in: {round: round.round}, out: deps}
+        - new_spec: {generate: prompts.write_node_spec, in: {node: which.node, composed_of: deps.deps, guide: $loop.guide}, out: spec, label: Write the missing spec}
+        - context:  {solve: "json_get(@in_round, 'context')", on: [spec_of, new_spec], in: {round: round.round}, out: context}
+        - write:    {generate: prompts.write_node, in: {node: which.node, spec: [spec_of, new_spec], context: context.context, guide: $loop.guide}, out: code, label: Write the node}
+        - check:
+            node: SOLVE
+            in: {component_graph: $loop.component_graph, node: which.node, code: write.code, tech_profile: $loop.tech_profile}
+            ports: [trigger, complete, in_component_graph, in_node, in_code, in_tech_profile, out_check]
+            out: check
+            backend: subprocess
+            command: ["python3", "-I", "-m", "appgraph.build.tool", "check_node"]
+            out_type: JSON
+            timeout: 60
+            label: Node check
+        - node_ok:  {evaluate: "json_get(@in_check, 'ok') == TRUE", in: {check: check.check}}
+        - feedback: {solve: "json_get(@in_check, 'feedback')", on: node_ok.fail, in: {check: check.check}, out: feedback}
+        - refine:   {generate: prompts.refine_node, in: {code: write.code, feedback: feedback.feedback, guide: $loop.guide}, out: code, label: Refine after the node check}
+        - checked:  {solve: "@in_code", on: [node_ok.pass, refine], in: {code: [write, refine]}, out: code}
+        - edges:
+            node: SOLVE
+            in: {component_graph: $loop.component_graph, node: which.node, code: checked.code}
+            ports: [trigger, complete, in_component_graph, in_node, in_code, out_check]
+            out: check
+            backend: subprocess
+            command: ["python3", "-I", "-m", "appgraph.build.tool", "check_edges"]
+            out_type: JSON
+            timeout: 60
+            label: Edge check
+        - edges_ok: {evaluate: "json_get(@in_check, 'ok') == TRUE", in: {check: edges.check}}
+        - edge_feedback: {solve: "json_get(@in_check, 'feedback')", on: edges_ok.fail, in: {check: edges.check}, out: feedback}
+        - refine_edges: {generate: prompts.refine_node, in: {code: checked.code, feedback: edge_feedback.feedback, guide: $loop.guide}, out: code, label: Refine after the edge check}
+        - final:    {solve: "@in_code", on: [edges_ok.pass, refine_edges, cached], in: {code: [checked, refine_edges, cached]}, out: code}
+        - store:
+            node: SOLVE
+            in: {component_graph: $loop.component_graph, round: round.round, code: final.code, tech_profile: $loop.tech_profile, output_dir: $loop.output_dir, manifest: $loop.manifest}
+            ports: [trigger, complete, in_component_graph, in_round, in_code, in_tech_profile, in_output_dir, in_manifest, out_stored]
+            out: stored
+            backend: subprocess
+            command: ["python3", "-I", "-m", "appgraph.build.tool", "store"]
+            out_type: JSON
+            timeout: 60
+            risky: true
+            label: Cache and write the node's file
+        - line:     {solve: "json_get(@in_stored, 'manifest')", in: {stored: store.stored}, out: manifest}
+
+  # 4. the test gate: run the suite in a container; on a failure repair the node it points at, up to max_test_attempts
+  - tests:
+      loop: "@in_max"
+      on: nodes
+      while: "@status == 'failed'"
+      in: {component_graph: $in.component_graph, tech_profile: $in.tech_profile, output_dir: $in.output_dir, guide: guide.guide, max: $in.max_test_attempts}
+      state:
+        status: {from: status.status, init: "failed"}
+        result: {from: run.result, init: {}}
+      steps:
+        - project:
+            node: SOLVE
+            in: {output_dir: $loop.output_dir}
+            ports: [trigger, complete, in_output_dir, out_project]
+            out: project
+            backend: subprocess
+            command: ["python3", "-I", "-m", "appgraph.build.tool", "project_files"]
+            out_type: JSON
+            timeout: 60
+            label: Collect the component's files
+        - files:    {solve: "json_get(@in_project, 'files')", in: {project: project.project}, out: files}
+        - run:
+            node: SOLVE
+            in: {files: files.files, tech_profile: $loop.tech_profile}
+            ports: [trigger, complete, in_files, in_tech_profile, out_result]
+            out: result
+            backend: subprocess
+            command: ["python", "tools/run_tests.py"]               # inside the image; /work is this folder, read-only
+            container: {image: "appgraph-verify:py3.12", memory_mb: 2048, cpus: 2, pids: 256}
+            parse: first_line
+            out_type: JSON
+            timeout: 600
+            risky: true
+            label: Run the tests in a container
+        - status:   {solve: "json_get(@in_result, 'status')", in: {result: run.result}, out: status}
+        - failed:   {evaluate: "@in_status == 'failed'", in: {status: status.status}}
+        - output:   {solve: "json_get(@in_result, 'output')", on: failed.pass, in: {result: run.result}, out: output}
+        - target:
+            node: SOLVE
+            in: {component_graph: $loop.component_graph, test_output: output.output, output_dir: $loop.output_dir}
+            ports: [trigger, complete, in_component_graph, in_test_output, in_output_dir, out_target]
+            out: target
+            backend: subprocess
+            command: ["python3", "-I", "-m", "appgraph.build.tool", "repair_target"]
+            out_type: JSON
+            timeout: 60
+            label: Which node the failure points at
+        - broken:   {solve: "json_get(@in_target, 'node')", in: {target: target.target}, out: node}
+        - spec:     {solve: "json_get(@in_target, 'spec')", in: {target: target.target}, out: spec}
+        - context:  {solve: "json_get(@in_target, 'context')", in: {target: target.target}, out: context}
+        - repair:   {generate: prompts.repair_node, in: {node: broken.node, spec: spec.spec, context: context.context, test_failure: output.output, guide: $loop.guide}, out: code, label: Repair the broken node}
+        - write_fix:
+            node: SOLVE
+            in: {component_graph: $loop.component_graph, node: broken.node, code: repair.code, output_dir: $loop.output_dir, tech_profile: $loop.tech_profile}
+            ports: [trigger, complete, in_component_graph, in_node, in_code, in_output_dir, in_tech_profile, out_written]
+            out: written
+            backend: subprocess
+            command: ["python3", "-I", "-m", "appgraph.build.tool", "write_repair"]
+            out_type: JSON
+            timeout: 60
+            risky: true
+            label: Write the repaired file
+
+  # 5. the summary, then the result or an error exit
+  - summary:
+      node: SOLVE
+      on: tests
+      in: {component_graph: $in.component_graph, tech_profile: $in.tech_profile, output_dir: $in.output_dir, manifest: nodes.manifest, test: tests.result, log_dir: $in.log_dir, contract_warnings: warnings.text}
+      ports: [trigger, complete, in_component_graph, in_tech_profile, in_output_dir, in_manifest, in_test, in_log_dir, in_contract_warnings, out_summary]
+      out: summary
+      backend: subprocess
+      command: ["python3", "-I", "-m", "appgraph.build.tool", "build_summary"]
+      out_type: JSON
+      timeout: 60
+      risky: true
+      label: Write the build summary
+  - warnings: {solve: "json_get(@in_plan, 'contract_warnings')", on: prepare, in: {plan: prepare.plan}, out: text}
+  - path:     {solve: "json_get(@in_summary, 'path')", on: summary, in: {summary: summary.summary}, out: path}
+  - counts:   {solve: "json_get(@in_summary, 'status') + ': ' + json_get(@in_summary, 'summary')", in: {summary: summary.summary}, out: text}
+  - passed:   {evaluate: "json_get(@in_summary, 'status') == 'passed'", in: {summary: summary.summary}}
+  - done:     {output: {manifest: nodes.manifest, tests: counts.text, summary: path.path}, on: passed.pass}
+  - absent:   {evaluate: "json_get(@in_summary, 'status') == 'no_tests'", on: passed.fail, in: {summary: summary.summary}}
+  - no_tests: {output: {manifest: nodes.manifest, tests: counts.text, summary: path.path}, on: absent.pass, exit: no_tests}
+  - tests_failed: {output: {manifest: nodes.manifest, tests: counts.text, summary: path.path}, on: absent.fail, exit: tests_failed}
