@@ -1,0 +1,25 @@
+version: "1.0-graph"
+# A two-step recipe for run_recipe's tests: a model call, then a SOLVE through appgraph.build.tool.
+workflow:
+  name: echo
+  inputs:
+    - {name: topic, type: TEXT}
+    - {name: folder, type: TEXT}      # absolute: a SOLVE step runs in the recipe's own folder
+  outputs:
+    - {name: answer, type: TEXT}
+    - {name: files, type: JSON}
+resources:
+  prompts:
+    ask: ./prompts/ask.md
+steps:
+  - ask: {generate: prompts.ask, in: {topic: $in.topic}, out: reply}
+  - list:
+      node: SOLVE
+      in: {output_dir: $in.folder}
+      ports: [trigger, complete, in_output_dir, out_files]
+      out: files
+      backend: subprocess
+      command: ["python3", "-I", "-m", "appgraph.build.tool", "project_files"]
+      out_type: JSON
+      timeout: 30
+  - done: {output: {answer: ask.reply, files: list.files}}

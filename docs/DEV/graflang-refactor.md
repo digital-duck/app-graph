@@ -110,6 +110,12 @@ Each phase is one or more commits with the suite green before and after. Stop af
 - **Verify:** that `node_output=None` really writes nothing beside the recipe (the recipe folder is inside an installed package, possibly read-only); that a `FILES` output and `.graf/` are not written; where logs go (`~/.graflang/logs` default; app-graph may want `~/app-graph/logs`).
 - `drift --llm`: one `dd_llm` call with `prompts/intent_drift.md` (today's prompt), the same JSON score parse. Test with the stub adapter. `compute_intent_drift.spl` is deleted.
 
+**Result of Phase 2** (2026-11-22):
+
+- `appgraph/run.py`: `run_recipe(name|path, inputs, llm=ADAPTER[:MODEL] or an object with generate(), max_llm_calls, max_steps, workers, checkpoint, resume, record, replay, log_dir)` -> `RecipeRun(outputs, summary, log_path)`; a stop (call cap, step cap, failed node, refused graph) raises `RecipeError` with the summary. It mirrors `graf run`'s assembly (`parse_llm_spec`, `make_llm`, `MeteredLLM`, cassettes, `capability_errors`, dd-logging), which lives in GraphLang's CLI function, not in a library call: the case for section 7's proposal.
+- **Checked:** with `node_output=None` nothing is written beside the recipe (no `.graf/`; asserted). A SOLVE step runs **in the recipe's own folder** (`resolver.base_dir`), so every path a recipe hands its tools must be absolute; `run_recipe` callers resolve them.
+- `drift --mode semantic` is one dd-llm call per dimension (`appgraph/judge.py`, prompt `prompts/intent_drift.md`, unchanged text); `compute_intent_drift.spl` is deleted. `--llm` default is now `claude_cli:claude-sonnet-5-5` (was `...-4-6`); `--llm-timeout` and `--llm-max-output-tokens` go to the dd-llm adapter. Tests: a stub adapter end to end through the CLI. Suite: 149 passed.
+
 ### Phase 3: `build_component` as a recipe
 
 The shape (long form decided by `graf compact`/`expand` as usual):

@@ -1635,55 +1635,20 @@ def suggest_graph_clusters(graph_path: str, seeds: tuple[str, ...], fmt: str) ->
 # ---------------------------------------------------------------------------
 
 def _make_llm_judge(llm: str, llm_timeout: int | None, llm_max_output_tokens: int | None = None):
-    """Build a (dimension, text_a, text_b) -> float callable that shells out
-    to spl/compute_intent_drift.spl, for graph_lib.drift_report(judge=...)
-    under mode="semantic" — dimension-aware since one judge callable is
-    shared across all 5 drift dimensions in a single drift_report() call,
-    not just intent (see that workflow's own docstring for why).
+    """A (dimension, text_a, text_b) -> float judge for graph_lib.drift_report(judge=...) under mode="semantic": one
+    dd-llm call per dimension with prompts/intent_drift.md (appgraph/judge.py). A failed call or an unparsable reply
+    stops the command with the reason."""
+    from appgraph.judge import JudgeError, make_judge
+    try:
+        inner = make_judge(llm, llm_timeout, llm_max_output_tokens)
+    except ValueError as e:
+        raise click.ClickException(f"--llm {llm!r}: {e}")
 
-    `llm_max_output_tokens` matters for reasoning-style local models (e.g.
-    ollama:gemma4): the judge prompt's real intent_a/intent_b text is long
-    enough that a "thinking" model can burn spl3's 1000-token GENERATE
-    default entirely on hidden reasoning before ever emitting the required
-    single number, coming back with empty content that fails to parse.
-    claude_cli doesn't hit this (short, terse answers fit in 1000 either
-    way), but it's cheap insurance for any adapter/model that does."""
     def judge(dimension: str, text_a: str, text_b: str) -> float:
-        import re
-        import subprocess
-        import tempfile
-
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
-            score_path = f.name
-
-        cmd = [
-            _spl3_bin(), "run", str(_SPL_ROOT / "compute_intent_drift.spl"),
-            "--tools", str(_SPL_ROOT / "tools.py"),
-            "--llm", llm,
-            "-p", f"dimension={dimension}",
-            "-p", f"intent_a={text_a}",
-            "-p", f"intent_b={text_b}",
-            "-p", f"output_path={score_path}",
-            "-p", "log_dir=logs/spl",
-        ]
-        if llm_timeout is not None:
-            cmd += ["--llm-timeout", str(llm_timeout)]
-        if llm_max_output_tokens is not None:
-            cmd += ["--llm-max-output-tokens", str(llm_max_output_tokens)]
-        proc = subprocess.run(
-            cmd, cwd=_workspace_root(), capture_output=True, text=True,
-            timeout=max(300, (llm_timeout or 0) + 60),
-        )
-        if proc.returncode != 0:
-            click.echo(proc.stderr[-2000:], err=True)
-            raise click.ClickException(f"{dimension} drift pass failed (exit {proc.returncode}) — see output above")
-
-        score_file = Path(score_path)
-        raw = score_file.read_text().strip() if score_file.exists() else proc.stdout.strip()
-        match = re.search(r"\d*\.?\d+", raw)
-        if not match:
-            raise click.ClickException(f"could not parse a {dimension} drift score from spl3's output: {raw!r}")
-        return float(match.group())
+        try:
+            return inner(dimension, text_a, text_b)
+        except JudgeError as e:
+            raise click.ClickException(str(e))
 
     return judge
 
@@ -1717,22 +1682,18 @@ def _parse_dims(_ctx, _param, value: str | None) -> tuple[str, ...] | None:
                    "exact-match set-overlap distance (1 - |intersection|/|union|) — an entry "
                    "either matches exactly or counts as fully different, no partial credit for "
                    "a near-miss.")
-@click.option("--llm", default="claude_cli:claude-sonnet-4-6", show_default=True,
-              help="ADAPTER:MODEL (e.g. claude_cli:claude-sonnet-4-6, ollama:gemma4). "
+@click.option("--llm", default="claude_cli:claude-sonnet-5-5", show_default=True,
+              help="ADAPTER:MODEL (e.g. claude_cli:claude-sonnet-5-5, ollama:gemma4). "
               "Used for --mode semantic — without it (pass --llm ''), any dimension under "
               "semantic mode comes back None rather than raising, so callers can tell "
               "'unchanged' apart from 'not measured'. Ignored (but harmless) for --mode "
               "jaccard/edit-dist, which are always free and need no LLM call.")
 @click.option("--llm-timeout", type=int, default=None, metavar="SECONDS",
-              help="Per-call timeout for the --mode semantic pass, forwarded to "
-                   "`spl3 run --llm-timeout`.")
+              help="Per-call timeout (seconds) for the --mode semantic pass, given to the dd-llm adapter.")
 @click.option("--llm-max-output-tokens", type=int, default=4096, show_default=True, metavar="N",
-              help="Per-call output token budget for the --mode semantic pass, forwarded to "
-                   "`spl3 run --llm-max-output-tokens` (spl3's own built-in default is 1000, "
-                   "too little for reasoning-style local models like ollama:gemma3/gemma4 — "
-                   "they can burn the whole budget on hidden chain-of-thought before ever "
-                   "emitting the required single number, coming back empty and failing to "
-                   "parse). Pass 0 to fall back to spl3's own default.")
+              help="Per-call output token budget for the --mode semantic pass. Reasoning-style local "
+                   "models (ollama:gemma4) can spend a small budget on hidden reasoning and answer "
+                   "nothing. Pass 0 for the adapter's own default.")
 @click.option("--dims", callback=_parse_dims, default=None, metavar="DIM,DIM,...",
               help=f"Restrict the report to specific dimensions (comma-separated, from "
                    f"{{{','.join(_DRIFT_DIMS)}}}). Default: all five. Dimensions not "
