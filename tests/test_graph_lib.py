@@ -1,10 +1,10 @@
-"""Tests for graph_code.graph_lib — Unified Duality Graph Schema v2.1."""
+"""Tests for appgraph.graph_lib — Unified Duality Graph Schema v2.1."""
 
 from __future__ import annotations
 
 import pytest
 
-from graph_code import (
+from appgraph import (
     ToolFailed,
     ValidationWarning,
     acyclic,
@@ -73,7 +73,7 @@ class TestLoader:
         assert "newtons_second_law" in unified_graph.nodes
 
     def test_example_files_load(self, apps_dir):
-        from graph_code.loader import load_domain
+        from appgraph.loader import load_domain
         # Recursive: every *.graph.yaml now lives under apps/<app>/blueprint/
         # (mandatory convention since 2026-08-13, see
         # docs/DEV/BUILD/blueprint-schema-v2.2.md's "blueprint/ subfolder" addendum),
@@ -114,7 +114,7 @@ class TestBlueprint:
         assert drift["vector"]["interface"] == 0.0
 
     def test_default_provenance_is_authored(self):
-        from graph_code.loader import load_domain
+        from appgraph.loader import load_domain
         import tempfile, os
         content = """
 graph: no_provenance
@@ -141,7 +141,7 @@ form:
             os.unlink(tmp)
 
     def test_todo_examples_carry_blueprint(self, apps_dir):
-        from graph_code.loader import load_domain
+        from appgraph.loader import load_domain
         for name in ("todo/blueprint/main.graph.yaml", "todo/blueprint/backend.graph.yaml", "todo/blueprint/frontend.graph.yaml"):
             domain = load_domain(apps_dir / name)
             assert domain.blueprint is not None, f"{name} missing blueprint block"
@@ -763,61 +763,61 @@ form:
 
 class TestExampleFiles:
     def test_classical_mechanics_flat_acyclic(self, apps_dir):
-        from graph_code.loader import load_domain
+        from appgraph.loader import load_domain
         g = load_domain(apps_dir / "classical_mechanics/blueprint/classical_mechanics_flat.graph.yaml")
         acyclic(g)
 
     def test_classical_mechanics_flat_reducible(self, apps_dir):
-        from graph_code.loader import load_domain
+        from appgraph.loader import load_domain
         g = load_domain(apps_dir / "classical_mechanics/blueprint/classical_mechanics_flat.graph.yaml")
         assert reducible(g) is True
 
     def test_classical_mechanics_two_radical(self, apps_dir):
-        from graph_code.loader import load_domain
+        from appgraph.loader import load_domain
         g = load_domain(apps_dir / "classical_mechanics/blueprint/classical_mechanics_flat.graph.yaml")
         assert reducible(g, first_radical_only=True) is False
 
     def test_classical_mechanics_unified_productivity_order(self, apps_dir):
-        from graph_code.loader import load_domain
+        from appgraph.loader import load_domain
         g = load_domain(apps_dir / "classical_mechanics/blueprint/classical_mechanics.graph.yaml")
         order = productivity_order(g)
         assert "velocity" in order
         assert "newtons_second_law" in order
 
     def test_physics_simulator_valid_events(self, apps_dir):
-        from graph_code.loader import load_domain
+        from appgraph.loader import load_domain
         g = load_domain(apps_dir / "physics_app/blueprint/physics_simulator.graph.yaml")
         warnings = validate_events(g)
         # Should be no hard errors; warnings about cycles are expected
         assert all(isinstance(w, ValidationWarning) for w in warnings)
 
     def test_auth_middleware_contract_ok(self, apps_dir):
-        from graph_code.loader import load_domain
+        from appgraph.loader import load_domain
         g = load_domain(apps_dir / "physics_app/blueprint/auth_middleware.graph.yaml")
         violations = check_call_contracts(g)
         assert violations == []
 
     def test_classical_mechanics_unified_validate_full(self, apps_dir):
-        from graph_code.loader import load_domain
+        from appgraph.loader import load_domain
         g = load_domain(apps_dir / "classical_mechanics/blueprint/classical_mechanics.graph.yaml")
         # enforce_two_radical: true in this example; validate_full must pass
         warnings = validate_full(g)
         assert all(isinstance(w, ValidationWarning) for w in warnings)
 
     def test_physics_simulator_validate_full(self, apps_dir):
-        from graph_code.loader import load_domain
+        from appgraph.loader import load_domain
         g = load_domain(apps_dir / "physics_app/blueprint/physics_simulator.graph.yaml")
         warnings = validate_full(g)
         assert all(isinstance(w, ValidationWarning) for w in warnings)
 
     def test_etl_workflow_validate_full(self, apps_dir):
-        from graph_code.loader import load_domain
+        from appgraph.loader import load_domain
         g = load_domain(apps_dir / "etl_workflow/blueprint/etl_workflow.graph.yaml")
         warnings = validate_full(g)
         assert all(isinstance(w, ValidationWarning) for w in warnings)
 
     def test_etl_workflow_retry_loop_is_a_flow_cycle(self, apps_dir):
-        from graph_code.loader import load_domain
+        from appgraph.loader import load_domain
         g = load_domain(apps_dir / "etl_workflow/blueprint/etl_workflow.graph.yaml")
         cycles = flow_cycles(g)
         assert any("fetch_data" in c for c in cycles)
@@ -829,23 +829,23 @@ class TestExampleFiles:
 
 class TestNewSchemaFields:
     def test_domain_path_parsed(self, apps_dir):
-        from graph_code.loader import load_domain
+        from appgraph.loader import load_domain
         g = load_domain(apps_dir / "classical_mechanics/blueprint/classical_mechanics.graph.yaml")
         assert g.domain == "science/physics/classical_mechanics"
 
     def test_target_languages_parsed(self, apps_dir):
-        from graph_code.loader import load_domain
+        from appgraph.loader import load_domain
         g = load_domain(apps_dir / "physics_app/blueprint/auth_middleware.graph.yaml")
         assert "python" in g.target_languages
 
     def test_target_languages_multi(self, apps_dir):
-        from graph_code.loader import load_domain
+        from appgraph.loader import load_domain
         g = load_domain(apps_dir / "physics_app/blueprint/main.graph.yaml")
         assert "python" in g.target_languages
         assert "javascript" in g.target_languages
 
     def test_enforce_two_radical_true(self, apps_dir):
-        from graph_code.loader import load_domain
+        from appgraph.loader import load_domain
         g = load_domain(apps_dir / "classical_mechanics/blueprint/classical_mechanics.graph.yaml")
         assert g.enforce_two_radical is True
 
@@ -853,7 +853,7 @@ class TestNewSchemaFields:
         assert flat_graph.enforce_two_radical is False
 
     def test_domain_type_integrated(self, apps_dir):
-        from graph_code.loader import load_domain
+        from appgraph.loader import load_domain
         g = load_domain(apps_dir / "physics_app/blueprint/main.graph.yaml")
         assert g.domain_type == "integrated"
 
@@ -896,7 +896,7 @@ form:
             validate_full(g)
 
     def test_enforce_two_radical_passes_when_satisfied(self, apps_dir):
-        from graph_code.loader import load_domain
+        from appgraph.loader import load_domain
         # classical_mechanics.graph.yaml has enforce_two_radical: true and
         # momentum requires mass (second radical) → should pass validate_full
         g = load_domain(apps_dir / "classical_mechanics/blueprint/classical_mechanics.graph.yaml")
@@ -906,7 +906,7 @@ form:
 class TestDrift:
     """docs/DEV/BUILD/blueprint-schema-v2.2.md §3's 5-component drift vector
     (structural/interface/intent/behavior/implementation) — intent is
-    intentionally out of scope here (needs an LLM judge, see `grafcode drift
+    intentionally out of scope here (needs an LLM judge, see `appgraph drift
     --llm`); these cover the four components computable from the graphs alone.
     """
 

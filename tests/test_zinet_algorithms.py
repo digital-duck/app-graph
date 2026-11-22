@@ -1,11 +1,11 @@
 """graph_lib's algorithms now run on zinet (zinet.algorithms). These pin the behaviours that must not change in the move:
 the order of ties, optional edges, the two-radical rule, and errors still being ToolFailed. Expected values are what graph_lib
-returned before the move (frozen in zinet's tests/characterization/golden/graph_code.json)."""
+returned before the move (frozen in zinet's tests/characterization/golden/appgraph.json)."""
 import pytest
 
-from graph_code.exceptions import ToolFailed
-from graph_code.graph_lib import acyclic, build_order, gap, learning_path, productivity_order, reducible
-from graph_code.loader import _build_graph_domain
+from appgraph.exceptions import ToolFailed
+from appgraph.graph_lib import acyclic, build_order, gap, learning_path, productivity_order, reducible
+from appgraph.loader import _build_graph_domain
 
 
 def domain(primitives, nodes, first_radical=()):
@@ -50,9 +50,9 @@ def test_reducible_rules_are_unchanged():
     assert reducible(g) is True
     assert reducible(g, first_radical_only=True) is False       # `p` needs the second radical `m`
     lonely = domain(["p"], {"root": {}, "a": {"composed_of": ["root"]}})
-    assert reducible(lonely) is False                           # graph-code wants a primitive underneath every node
+    assert reducible(lonely) is False                           # app-graph wants a primitive underneath every node
     dangling = domain(["p"], {"a": {"composed_of": ["p", "ghost"]}})
-    assert reducible(dangling) is True                          # an undeclared name is not graph-code's concern here
+    assert reducible(dangling) is True                          # an undeclared name is not app-graph's concern here
 
 
 def test_errors_are_still_tool_failed():

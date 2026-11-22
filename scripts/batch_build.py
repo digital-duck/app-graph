@@ -2,12 +2,12 @@
 """Batch build apps from their blueprint .graph.yaml files.
 
 Discovers every app under an apps root that has a `blueprint/*.graph.yaml`
-file and runs `grafcode build` on it, streaming output and collecting
+file and runs `appgraph build` on it, streaming output and collecting
 pass/fail results.  Mirrors the role of `batch_generate.py` in the
 conceptbook repos but targets code-generation apps rather than prose sections.
 
 Prerequisites:
-    grafcode on PATH  (pip install -e . from repo root)
+    appgraph on PATH  (pip install -e . from repo root)
 
 Usage examples:
     # Dry-run: show what would be built
@@ -121,13 +121,13 @@ def _app_type(blueprint_path: Path) -> str:
 # ---------------------------------------------------------------------------
 
 def _run_build(blueprint_path: Path, llm: str, llm_timeout: int | None) -> bool:
-    """Shell out to `grafcode build <path> --llm <llm>`, streaming output.
+    """Shell out to `appgraph build <path> --llm <llm>`, streaming output.
 
     Returns True on exit code 0. Raises SessionLimitHit as soon as any output
     line indicates an LLM session/rate limit so the batch can abort cleanly
     rather than letting every remaining job fail the same way.
     """
-    cmd = ["grafcode", "build", str(blueprint_path), "--llm", llm]
+    cmd = ["appgraph", "build", str(blueprint_path), "--llm", llm]
     if llm_timeout is not None:
         cmd += ["--llm-timeout", str(llm_timeout)]
 
@@ -175,11 +175,11 @@ def _run_build(blueprint_path: Path, llm: str, llm_timeout: int | None) -> bool:
 @click.option(
     "--llm", default="claude_cli", show_default=True,
     envvar="GC_LLM",
-    help="Adapter[:model] string forwarded to `grafcode build --llm`.",
+    help="Adapter[:model] string forwarded to `appgraph build --llm`.",
 )
 @click.option(
     "--llm-timeout", type=int, default=None, metavar="SECONDS",
-    help="Per-LLM-call timeout forwarded to `grafcode build --llm-timeout`.",
+    help="Per-LLM-call timeout forwarded to `appgraph build --llm-timeout`.",
 )
 @click.option(
     "--skip-existing/--no-skip-existing", default=True,
@@ -202,7 +202,7 @@ def main(
     dry_run: bool,
     stop_on_error: bool,
 ) -> None:
-    """Batch build apps from blueprint .graph.yaml files using grafcode build."""
+    """Batch build apps from blueprint .graph.yaml files using appgraph build."""
     root = apps_dir or DEFAULT_APPS_DIR
     if not root.is_dir():
         click.echo(f"[error] apps dir not found: {root}", err=True)

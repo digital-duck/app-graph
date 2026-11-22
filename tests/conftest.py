@@ -1,4 +1,4 @@
-"""Shared pytest fixtures for graph_code tests."""
+"""Shared pytest fixtures for appgraph tests."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from graph_code.loader import load_domain, GraphDomain
+from appgraph.loader import load_domain, GraphDomain
 
 APPS_DIR = Path(__file__).parent.parent / "apps"
 

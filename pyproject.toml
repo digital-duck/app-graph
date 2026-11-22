@@ -3,9 +3,9 @@ requires = ["setuptools>=61", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "grafcode"                  # the PyPI name ("graph-code" is too similar to an existing project); the Python package is `graph_code`
-version = "0.1.1"
-description = "Graph-driven code and curriculum generation — Unified Duality Graph Schema v2.1"
+name = "app-graph"                 # the PyPI name; the Python package is `appgraph`. Continues grafcode 0.1.1 (github.com/digital-duck/graph-code)
+version = "0.2.0"
+description = "App builder over GraphLang: a blueprint graph (Unified Duality Graph Schema v2.1+) in, tested code out"
 readme = "README.md"
 license = {text = "Apache-2.0"}
 requires-python = ">=3.11"             # spl-llm and zinet need 3.11 / 3.10; 3.11 is the common floor
@@ -14,8 +14,10 @@ dependencies = [
     "pyyaml>=6.0",
     "click>=8.1",
     "ruamel.yaml>=0.18",
-    "spl-llm>=3.0.0",
-    "zinet>=0.2.0",      # the graph algorithms (order, learning path, reducibility) shared with GraphLang and work-graph
+    "spl-llm>=3.0.0",         # until Phase 5 of docs/DEV/graflang-refactor.md, then dropped
+    "zinet>=0.2.2",           # the graph algorithms (order, learning path, reducibility) shared with GraphLang and work-graph
+    "graflang>=0.2.1,<0.3",   # the build/compile recipes run on the GraphLang runtime (package `graphlang`)
+    "dd-llm>=0.2.0",          # the LLM adapters, shared with GraphLang and work-graph
 ]
 
 classifiers = [
@@ -28,10 +30,10 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/digital-duck/graph-code"
-Repository = "https://github.com/digital-duck/graph-code"
-Issues = "https://github.com/digital-duck/graph-code/issues"
-Changelog = "https://github.com/digital-duck/graph-code/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/digital-duck/app-graph"
+Repository = "https://github.com/digital-duck/app-graph"
+Issues = "https://github.com/digital-duck/app-graph/issues"
+Changelog = "https://github.com/digital-duck/app-graph/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 dev = [
@@ -44,20 +46,20 @@ ide = [
 ]
 
 [project.scripts]
-grafcode = "graph_code.cli:main"
-gfc = "graph_code.cli:main"
+appgraph = "appgraph.cli:main"
+agr = "appgraph.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
-# Bundled so `grafcode extract --llm`/`build`/`ide`/`drift --llm` work after a
-# plain `pip install graph-code`, without needing a git checkout of this repo
+# Bundled so `appgraph extract --llm`/`build`/`ide`/`drift --llm` work after a
+# plain `pip install app-graph`, without needing a git checkout of this repo
 # — see _SPL_ROOT/_GRAPH_IDE_ROOT in cli.py, which resolve these paths
-# relative to the installed graph_code package itself.
+# relative to the installed appgraph package itself.
 # graph-ide/frontend's node_modules/ and dist/ are deliberately excluded (npm
-# install is a separate, documented one-time step for `grafcode ide`).
-graph_code = [
+# install is a separate, documented one-time step for `appgraph ide`).
+appgraph = [
     "spl/*.spl",
     "spl/*.py",
     "graph-ide/api/**/*.py",

@@ -1,0 +1,248 @@
+-- integrate_system.spl
+-- app-graph system integration workflow. Runs after every imported
+-- component has passed its own build_component.spl verification (build_app.spl
+-- halts before calling this if any component's manifest contains "FAILED").
+--
+-- Scope decision, stated plainly: acceptance tests here are HTTP-level,
+-- generated against the live backend server only (started, polled for
+-- readiness, and stopped by this workflow). They validate the API contract
+-- each application's `spec.contract` describes (status codes, response
+-- shapes, persistence). They do NOT drive the Vue frontend through a real
+-- browser — that would need Playwright (or similar) infra this repo does not
+-- have set up yet. See docs/DEV/BUILD/README.md §12 for the reasoning.
+--
+-- There is also no per-pair "integration glue" generation step, unlike the
+-- original graph-driven-workflow/spl/integrate_system.spl. That version
+-- generated CORS/env-var wiring between components via an LLM call. In this
+-- app the wiring already exists in the generated code itself (backend's
+-- api_routes has CORS enabled for :5173; frontend's api_client reads
+-- VITE_API_BASE_URL) and is already checked by contract_warnings() at each
+-- component's own build time (see build_component.spl) — generating and
+-- re-verifying glue code for a two-component REST pairing that both sides
+-- already declare a matching contract for would just spend an LLM call to
+-- restate what's already correct.
+--
+-- Usage:
+--   spl3 run spl/integrate_system.spl --tools spl/tools.py \
+--     -p system_yaml=apps/todo/blueprint/main.graph.yaml --llm claude_cli
+
+CREATE FUNCTION write_acceptance_test(application TEXT, spec TEXT, endpoints TEXT)
+RETURN TEXT
+AS $$
+You are an expert software engineer writing an HTTP-level acceptance test.
+
+Write a self-contained Python script (stdlib `urllib.request`/`json` only — no
+`requests`, no `pytest`, no imports beyond the standard library) for the
+application: {application}
+
+Start with this exact `request()` helper, unmodified — several endpoints in
+this API return `204 No Content` (an empty body) on success, and calling
+`json.loads()` on an empty body raises `json.decoder.JSONDecodeError`, which
+several previously-generated acceptance tests got wrong:
+
+```python
+import json
+import urllib.error
+import urllib.request
+
+def request(method, path, body=None):
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(
+        f"{{BASE}}{{path}}", data=data, method=method,
+        headers={{"Content-Type": "application/json"}} if data else {{}},
+    )
+    try:
+        with urllib.request.urlopen(req) as resp:
+            raw = resp.read()
+            return resp.status, json.loads(raw) if raw else None
+    except urllib.error.HTTPError as e:
+        raw = e.read()
+        return e.code, json.loads(raw) if raw else None
+```
+
+Specification:
+{spec}
+
+Live backend endpoints available to call directly:
+{endpoints}
+
+The script must:
+1. Exercise the exact user story in the spec by making real HTTP requests
+   against the live backend base URL given above
+2. Assert every condition in the contract (status codes, response shape,
+   values) using plain `assert` statements with descriptive messages. When
+   the spec/endpoints text states an explicit status code for an operation
+   (e.g. `status_code=201`, "-> 201 + slug"), assert that EXACT code — do
+   NOT default to assuming 200 for a POST/create just because it is the most
+   common REST convention; many contracts in this API intentionally return
+   201 on creation.
+3. Clean up any data it creates (e.g. DELETE what it POSTed) so the script is
+   safe to re-run against the same live server
+4. Cover the primary edge case mentioned in the spec (e.g. empty input,
+   unknown id, empty-list state) as a second assertion block. For an
+   "unknown id" case: use a syntactically valid id of the correct type that
+   simply does not exist (e.g. a large integer like 999999 if ids are
+   integers) — a wrong-typed id (a string where the route expects an int)
+   gets rejected by FastAPI''s own path-param validation as 422 before the
+   route''s own not-found logic ever runs, testing request validation
+   instead of the 404 behavior the spec actually describes.
+5. Use the EXACT path shown in the spec/endpoints above, including trailing
+   slashes — e.g. if the contract says `POST /api/v1/items/`, request
+   `/api/v1/items/`, not `/api/v1/items`. A missing trailing slash on a
+   POST/PUT/DELETE triggers FastAPI''s redirect_slashes 307 response, which
+   the `request()` helper above does NOT follow (urllib does not reliably
+   re-send a POST body across a redirect), so the test sees status 307
+   instead of the real response and fails on an assertion that has nothing
+   to do with the actual bug.
+6. Match field names EXACTLY as declared in the spec/endpoints above, including
+   case — do NOT convert a snake_case field (e.g. `recipe_category`,
+   `recipe_ingredient`) to camelCase, and do NOT invent, rename, or drop a
+   field. If the spec is ambiguous about a field's exact name, look it up in
+   the endpoints text above rather than guessing a JS-style convention.
+7. When a field's type is a nested object or a list of nested objects that
+   the API itself returned earlier (e.g. a tag/category/item fetched or
+   created via a prior request in this same script), reuse that FULL object
+   exactly as returned — do NOT construct a new partial object with only
+   some of its fields (e.g. `{{"name": "x"}}` when the real object also has a
+   required `id`/`slug`). Building request bodies for update/PUT calls,
+   include every field the corresponding GET response has, not just the
+   ones you intend to change.
+8. On success, print "PASS" and exit 0. On any AssertionError, let it
+   propagate (non-zero exit) — do not catch and swallow it.
+
+Output only the Python script. No preamble, no markdown fences.
+$$;
+
+CREATE FUNCTION write_system_readme(spec TEXT, results TEXT)
+RETURN TEXT
+AS $$
+You are an expert software engineer writing a product-level README for a
+software system. The specification below describes exactly what this system
+is and does — base the README on that, not on any assumption about what kind
+of app this might be. Do NOT default to describing a "todo app" or any other
+specific example app; read the specification and describe THIS system.
+
+Specification for this README:
+{spec}
+
+Acceptance-test results from the just-completed integration run:
+{results}
+
+Write the README.md described by the specification above. Include the
+acceptance-test results verbatim in a short "Status" section near the top
+(pass/fail per application) so the README reflects what was actually just
+verified, not just intent. Reference each component''s own README.md (in its
+own subdirectory) for that component''s specific setup/run/test instructions
+rather than repeating them here.
+
+Output only the Markdown content. No preamble, no markdown fences around the
+whole document (the document itself is Markdown, don''t wrap it in a code block).
+$$;
+
+WORKFLOW integrate_system
+    INPUT:
+        @system_yaml TEXT DEFAULT 'apps/todo/blueprint/main.graph.yaml',
+        @log_dir TEXT DEFAULT 'logs/spl',
+        @output_dir TEXT DEFAULT ''
+    OUTPUT:
+        @report TEXT
+DO
+    CALL now_float() INTO @t_start
+    CALL now_iso() INTO @_ts
+    CALL sanitize_ts(@_ts) INTO @_ts_safe
+    CALL make_log_path(@log_dir, @_ts_safe) INTO @log_file
+    CALL write_file(@log_file, f"# System Integration\n\nsystem: {@system_yaml}\nstarted: {@_ts}\n\n", "w") INTO @_
+
+    -- 1. Every imported component must already have a populated output dir
+    --    (build_app.spl only reaches this workflow once each component's own
+    --    build_component.spl run has passed its ASSERT gate).
+    CALL check_components_verified(@system_yaml, @output_dir) INTO @readiness
+    EVALUATE @readiness
+        WHEN contains("not_ready") THEN
+            LOGGING f"Integration blocked — unverified components: {@readiness}" LEVEL ERROR
+            RETURN f"BLOCKED: {@readiness}"
+        ELSE
+            LOGGING "All components verified — proceeding with integration" LEVEL INFO
+    END
+
+    CALL check_port_consistency(@system_yaml) INTO @_port_warnings
+    EVALUATE @_port_warnings
+        WHEN = "" THEN
+            LOGGING "No port declaration mismatches" LEVEL INFO
+        ELSE
+            LOGGING f"Port declaration warnings:\n{@_port_warnings}" LEVEL WARN
+            CALL write_file(@log_file, f"## Port declaration warnings\n\n{@_port_warnings}\n\n", "a") INTO @_
+    END
+
+    -- 2. Start the live backend; acceptance tests run against it directly
+    CALL system_components(@system_yaml) INTO @components
+    CALL component_item(@components, 0) INTO @backend_item
+    CALL component_graph(@backend_item) INTO @backend_graph
+    CALL component_output_dir(@backend_graph, @output_dir) INTO @backend_dir
+    CALL component_port(@backend_graph) INTO @backend_port
+
+    LOGGING f"Starting backend server: {@backend_dir} on :{@backend_port}" LEVEL INFO
+    CALL start_backend_server(@backend_dir, @backend_port) INTO @backend_pid
+    CALL wait_for_http(f"http://localhost:{@backend_port}/docs", "20") INTO @server_status
+
+    EVALUATE @server_status
+        WHEN = "timeout" THEN
+            CALL stop_process(@backend_pid) INTO @_
+            LOGGING "Backend server did not come up within 20s" LEVEL ERROR
+            RETURN "FAILED: backend server did not start"
+        ELSE
+            LOGGING f"Backend server ready (pid {@backend_pid})" LEVEL INFO
+    END
+
+    -- 3. Generate and run one acceptance test per application, against the live backend
+    CALL system_applications(@system_yaml) INTO @apps
+    CALL app_count(@apps) INTO @app_count
+    @report := ""
+    @_k := 0
+
+    WHILE @_k < @app_count DO
+        CALL app_item(@apps, @_k) INTO @app
+        CALL app_spec_text(@app, @system_yaml) INTO @app_spec
+        CALL app_backend_endpoints(@app, @system_yaml) INTO @endpoints
+        CALL now_float() INTO @t_app_start
+
+        LOGGING f"Acceptance test: {@app}" LEVEL INFO
+        GENERATE write_acceptance_test(@app, @app_spec, @endpoints) INTO @test_code
+        CALL write_test_file(@app, @test_code, @log_dir) INTO @_test_path
+
+        CALL run_acceptance_test(@_test_path) INTO @result
+        CALL time_elapsed(@t_app_start) INTO @app_elapsed
+        EVALUATE @result
+            WHEN contains("PASS") THEN
+                LOGGING f"PASS {@app} ({@app_elapsed}s)" LEVEL INFO
+                @report := @report + f"\n- PASS {@app} ({@app_elapsed}s)"
+            ELSE
+                LOGGING f"FAIL {@app}: {@result}" LEVEL ERROR
+                @report := @report + f"\n- FAIL {@app}: {@result}"
+        END
+        @_k := @_k + 1
+    END
+
+    -- 4. Tear down the backend regardless of test outcome
+    CALL stop_process(@backend_pid) INTO @_
+    LOGGING f"Backend server stopped (pid {@backend_pid})" LEVEL INFO
+
+    -- 5. Generate the system-level README last, so it reports real results —
+    --    generated regardless of pass/fail, since a failing run still deserves
+    --    an accurate "Status" section rather than no README at all.
+    CALL system_readme_spec_text(@system_yaml) INTO @readme_spec
+    GENERATE write_system_readme(@readme_spec, @report) INTO @readme_content
+    CALL write_system_readme_file(@readme_content, @system_yaml, @output_dir) INTO @readme_path
+    LOGGING f"System README written: {@readme_path}" LEVEL INFO
+
+    CALL time_elapsed(@t_start) INTO @total_elapsed
+    LOGGING f"System integration complete in {@total_elapsed}s" LEVEL INFO
+    CALL write_file(@log_file, f"## Results\n\n{@report}\n\ntotal: {@total_elapsed}s\n", "a") INTO @_
+
+    EVALUATE @report
+        WHEN contains("FAIL") THEN
+            RETURN f"FAILED:{@report}"
+        ELSE
+            RETURN @report
+    END
+END

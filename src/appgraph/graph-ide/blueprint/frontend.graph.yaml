@@ -1,0 +1,201 @@
+# ── Unified Duality Graph Schema v2.1 — Software Profile ────────────────────
+# Reverse-engineered from tools/graph-ide/frontend/src/*.js's real,
+# hand-ported source (2026-08-14) — provenance: reverse, not build.
+domain: software/frontend/vanilla_js
+target_languages: [javascript]
+comment: |
+  Vite + vanilla JS SPA: app picker, an SVG DAG renderer with no third-party
+  graph library (drag-to-reposition, click-to-highlight-ancestors), a
+  sidebar (kind legend / discovered files / components / counts), and a
+  detail panel (read-only spec display, or an editable form that PATCHes
+  straight to the backend). Deliberately dependency-free — the README notes
+  a CDN graph-library bundle tripped a strict CSP's "unsafe-eval" block, so
+  a plain hand-rolled SVG layout was chosen instead.
+capstone: main_js
+
+# tech_profile: not "vue_typescript" — this is plain JavaScript, no Vue, no
+# TypeScript, unlike every apps/ frontend. Not present in
+# spl/tech_profiles.py's PROFILE dict; this component is never intended to
+# be rebuilt via build_component.spl (provenance: reverse — real hand-ported
+# code, not an LLM-generation target), so an unmapped label is harmless.
+tech_profile: vanilla_js
+port: ${{ settings.FRONTEND_VITE_PORT }}
+
+blueprint:
+  id: graph_ide_frontend
+  schema_version: "2.2"
+  graph_schema_version: "2.1"
+  domain_type: software
+  provenance: reverse
+  parent_blueprint: null
+  lineage: []
+
+imports:
+  - id: backend
+    graph: ./backend.graph.yaml
+    comment: |
+      The backend's three exports (list_roots/get_graph/patch_node) are
+      called directly from main_js via fetch() — no dedicated api_client
+      module the way apps/ frontends have one, since this SPA has exactly
+      three call sites total and Vite's dev-server proxy (vite.config.js)
+      already rewrites /api -> the backend, so there's no base-URL/env-var
+      plumbing worth centralizing into its own file.
+
+form:
+  primitives:
+    vite:
+      defines: "Vite: dev server, HMR, module bundler"
+      tier: 0
+      kind: config
+    dom_api:
+      defines: "Browser DOM/SVG/fetch APIs — no framework, no third-party library"
+      tier: 0
+      kind: config
+
+  nodes:
+    GraphView:
+      kind: module
+      defines: "Hand-rolled SVG DAG renderer: tiered auto-layout, drag-to-reposition, click-to-highlight-ancestors"
+      composed_of: [dom_api]
+      tier: 1
+      spec:
+        interface: |
+          export function createGraphView(container: HTMLElement): {
+            render(graph: {nodes, edges}, onNodeSelect: (node) => void): void
+            recenter(): void
+          }
+        contract: |
+          layout(): buckets nodes by tier (numeric, or the literal string "system" —
+          system-level applications render one row below the highest component tier);
+          within a tier, rows are sorted by (component, id) and centered against the
+          widest row.
+          Node color keyed by node.kind: primitive/concept/module/doc/step/component/
+          application (see KIND_COLOR) — richer than the old GDW schema's fixed
+          primitive/concept/application set.
+          Edge style keyed by edge.type: "composed_of" solid gray, "needs" dashed blue,
+          "optional" dotted purple (enriched_by/optionally_depends_on — app-graph's
+          non-mandatory form edges).
+          Clicking a node (pointerdown+pointerup with <3px movement) computes its
+          ancestors by walking edges backwards (predecessors map) and highlights the
+          selected node amber, its ancestors pale-amber, edges along the path blue;
+          everything else dims to DIM_OPACITY. Dragging (>3px movement) repositions the
+          node and live-redraws only the edges touching it.
+          recenter() restores the original auto-computed positions and clears
+          highlighting, scrolling the container back to (0,0).
+      verification:
+        node: |
+          - render() with a known graph produces one <g> per node, positioned per layout()
+          - clicking a node highlights exactly its transitive ancestors
+          - dragging updates only edges touching the dragged node
+        edge: |
+          - KIND_COLOR / EDGE_COLOR cover every kind/type graph_discovery.py can emit
+      docs: |
+        - No changes needed from the original GDW-schema port except an expanded
+          KIND_COLOR/EDGE_COLOR vocabulary (module/doc/step/component kinds, "optional"
+          edge type) — the layout/drag/highlight logic itself is schema-agnostic
+
+    Sidebar:
+      kind: module
+      defines: "Left panel: node-kind legend, discovered files, components, node/edge counts"
+      composed_of: [dom_api]
+      tier: 1
+      spec:
+        interface: |
+          export function renderSidebar(el: HTMLElement, graph: {files, components, nodes, edges} | null): void
+        contract: |
+          Always renders the kind-color legend, even with graph=null (initial empty
+          state). With a graph, additionally lists graph.files (path per row),
+          graph.components (name plus its depends_on, derived from that component's own
+          imports: — see backend.graph.yaml's graph_discovery contract), and node/edge
+          counts.
+      verification:
+        node: |
+          - renderSidebar(el, null) shows only the legend
+          - renderSidebar(el, graph) shows files/components/counts sections
+      docs: |
+        - Unchanged from the original port — purely presentational, no schema coupling
+
+    DetailPanel:
+      kind: module
+      defines: "Right panel: read-only spec/verification/docs display, or (Edit mode) an editable form that PATCHes the backend"
+      composed_of: [dom_api]
+      tier: 1
+      spec:
+        interface: |
+          export function renderDetail(el: HTMLElement, node: object | null, opts?: {
+            editable?: boolean, root?: string, onSaved?: (updatedNode) => void
+          }): void
+        contract: |
+          node=null -> an empty-state hint.
+          Read-only mode: renders defines/spec.interface/spec.contract/spec.user_story/
+          verification.node/verification.edge/docs, skipping any field that's falsy.
+          Edit mode: one <textarea> per EDITABLE_FIELDS entry for the node's kind
+          (primitive/component -> just "defines"; concept/module/doc/step -> the full
+          concept field set; application -> user_story instead of interface), pre-filled
+          verbatim with the field's current stored text. Save PATCHes only the fields that
+          actually changed, exactly what's typed — no re-bulleting (see
+          graph_yaml_style.edited_text_to_scalar's contract on the backend for why: this
+          is "what you see is what's saved"). A failed PATCH shows the backend's error
+          detail inline and re-enables the form; a successful one calls onSaved(updated).
+      verification:
+        node: |
+          - read-only mode renders no <textarea>
+          - edit mode's field set matches EDITABLE_FIELDS[node.kind] (or the concept
+            default for module/doc/step, which alias to it)
+          - Save with no changed fields shows "no changes" without a network call
+          - Save PATCHes only the changed fields
+        edge: |
+          - PATCH body shape matches backend.graph.yaml's patch_node contract exactly
+      docs: |
+        - KIND_COLOR and EDITABLE_FIELDS both expanded for app-graph's richer kind
+          vocabulary during the 2026-08-14 port (component -> primitive-like minimal
+          field set; module/doc/step -> aliased to concept's field set)
+
+    main_js:
+      kind: module
+      defines: "Application entry point: wires the topbar, app picker, sidebar, canvas, and detail panel together"
+      composed_of: [vite, dom_api, GraphView, Sidebar, DetailPanel]
+      tier: 2
+      spec:
+        interface: |
+          Builds the DOM shell directly (topbar, sidebar, canvas, splitter, panel) —
+          no component framework, no router.
+          loadRoots(): GET /api/graphs/roots -> populates the app-picker <select>;
+            honors a ?root= query param as the initial selection if it's in the list.
+          loadGraph(root): GET /api/graphs?root=<root> -> graphView.render(...),
+            renderSidebar(...), updates the URL via history.replaceState, shows a
+            "<n> nodes · <m> edges" status line.
+          Splitter drag: pointerdown/pointermove/pointerup resize the canvas/panel split,
+            panel absorbing whatever width is left.
+        contract: |
+          currentRoot/currentNode/editEnabled are module-level state (single global
+          instance — this SPA never has more than one graph loaded at a time).
+          showNode(node) re-renders DetailPanel with the current editable/root/onSaved
+          options every time selection or edit-mode changes.
+          Edit-mode toggle re-renders the currently-selected node's detail panel in the
+          new mode, discarding any unsaved in-progress edit.
+      verification:
+        node: |
+          - on load, GET /api/graphs/roots is called and the dropdown populates
+          - selecting a root and clicking Load triggers GET /api/graphs?root=...
+          - toggling Edit re-renders the detail panel in the new mode
+        edge: |
+          - loadGraph's fetch path/query params match backend.graph.yaml's get_graph
+            contract exactly
+      docs: |
+        - Unchanged from the original port — this file has zero schema-format
+          assumptions of its own; all schema knowledge lives in the backend
+
+verification:
+  - node: GraphView
+    tool: manual
+    comment: |
+      - NOT browser-verified as of the 2026-08-14 port — `node --check` syntax-verified
+        every file only; no `npm install`/`npm run dev` session, no manual click-through,
+        was run against a real graph in a browser yet. The backend's output JSON was
+        verified directly (see backend.graph.yaml's graph_discovery/graph_writer
+        verification notes), so the data this component renders is known-correct, but
+        the rendering itself is unverified. No automated vitest suite ported either (the
+        original tool had none). Flagged here rather than left implicit — see
+        docs/DEV/BUILD/README-lesson-learned.md's checklist item 5 ("after a build
+        passes, still read/run the actual output").

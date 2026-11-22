@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.0 (unreleased)
+
+- **New name: app-graph** (PyPI `app-graph`, package `appgraph`, commands `appgraph` and `agr`), continuing grafcode 0.1.1 from the graph-code repository, which stays as it was. `grafcode`/`gfc` are not installed by this package, so both can live in one environment. Work folders move from `~/graph-code/` to `~/app-graph/`; the extract cache from `.grafcode_cache/` to `.appgraph_cache/`.
+- New core dependencies: `graflang` and `dd-llm` (the build workflows are moving onto GraphLang, see `docs/DEV/graflang-refactor.md`); `zinet>=0.2.2`.
+
 ## 0.1.1
 
 - The fief example (`apps/fief/blueprint/component.graph.yaml`) now has a `blueprint:` id, so every bundled example graph loads (fixes `test_example_files_load`). No code changes.

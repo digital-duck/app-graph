@@ -1,15 +1,15 @@
-# `grafcode` User Guide
+# `appgraph` User Guide
 
-`grafcode` is the CLI for graph-code blueprint files (`*.graph.yaml`). It
+`appgraph` is the CLI for app-graph blueprint files (`*.graph.yaml`). It
 validates, extracts, builds, and inspects blueprint graphs — the `Unified
 Duality Graph Schema v2.1+` files that describe an app's structure before
 any code exists. Code generation itself (`extract --llm`, `build`, `drift
 --llm`) is a thin wrapper: it shells out to `spl3` (package `spl-llm`,
-installed automatically as a `grafcode` dependency) to run the `.spl`
-workflows that actually call an LLM — `grafcode` itself has no LLM-calling
+installed automatically as a `appgraph` dependency) to run the `.spl`
+workflows that actually call an LLM — `appgraph` itself has no LLM-calling
 code, it's the schema + algorithms library and the CLI around it.
 
-This guide covers every `grafcode` subcommand with real examples. For the
+This guide covers every `appgraph` subcommand with real examples. For the
 schema itself (what goes *in* a `graph.yaml`), see
 `docs/DEV/BUILD/blueprint-schema-v2.2.md` and the worked example at
 `apps/todo/blueprint/`. For architecture/internals aimed at an AI coding
@@ -20,15 +20,15 @@ agent working in this repo, see the root `CLAUDE.md`.
 ```bash
 conda activate spl123
 pip install -e ".[dev]"   # from this repo's root (dev checkout)
-# or: pip install grafcode  (release install)
-grafcode --help            # sanity check
-gfc --help                 # same CLI, shorter name
+# or: pip install appgraph  (release install)
+appgraph --help            # sanity check
+agr --help                 # same CLI, shorter name
 ```
 
-This installs two console scripts — `grafcode` and `gfc` (both point at
-`graph_code.cli:main`) — and pulls in `spl-llm` (the `spl3` CLI) as a real
+This installs two console scripts — `appgraph` and `agr` (both point at
+`appgraph.cli:main`) — and pulls in `spl-llm` (the `spl3` CLI) as a real
 dependency. Nothing further is needed for `extract --llm`/`build`/`drift
---llm` to work. `grafcode ide`'s Vue frontend is the one piece that needs a
+--llm` to work. `appgraph ide`'s Vue frontend is the one piece that needs a
 manual one-time `npm install` (see its section below) since `pip` can't
 install npm packages.
 
@@ -37,8 +37,8 @@ install npm packages.
 After install, confirm all three tools resolve inside `spl123`:
 
 ```bash
-(spl123) $ which gfc
-/home/papagame/anaconda3/envs/spl123/bin/gfc
+(spl123) $ which agr
+/home/papagame/anaconda3/envs/spl123/bin/agr
 
 (spl123) $ which spl3
 /home/papagame/anaconda3/envs/spl123/bin/spl3
@@ -47,28 +47,28 @@ After install, confirm all three tools resolve inside `spl123`:
 /home/papagame/.local/bin/mg
 ```
 
-`gfc` and `spl3` live in the `spl123` conda env.  `mg` (momagrid — hub/agent
+`agr` and `spl3` live in the `spl123` conda env.  `mg` (momagrid — hub/agent
 CLI) is a Go binary installed globally at `~/.local/bin` and is available in
 any environment.
 
-### The `~/graph-code` workspace
+### The `~/app-graph` workspace
 
-Commands that write files default into named subfolders of `~/graph-code`
+Commands that write files default into named subfolders of `~/app-graph`
 (created on first use, not eagerly) rather than into this repo's own
-`apps/` — so a plain `pip install grafcode` user always has somewhere
+`apps/` — so a plain `pip install appgraph` user always has somewhere
 writable to work, and repeat runs never silently collide with someone
 else's checked-in apps:
 
 | Subfolder | Used by |
 |---|---|
-| `~/graph-code/output/<app>` | `grafcode extract`'s default `--output-dir` |
-| `~/graph-code/input/<app>` | `grafcode build`'s default `--input-dir` (when TARGET is an app name, not a direct path) |
-| `~/graph-code/report/` | `grafcode report`/`compare`/`drift`'s `--out FILE`, for a bare filename |
-| `~/graph-code/ide/` | `grafcode ide`'s default `--apps-root` |
+| `~/app-graph/output/<app>` | `appgraph extract`'s default `--output-dir` |
+| `~/app-graph/input/<app>` | `appgraph build`'s default `--input-dir` (when TARGET is an app name, not a direct path) |
+| `~/app-graph/report/` | `appgraph report`/`compare`/`drift`'s `--out FILE`, for a bare filename |
+| `~/app-graph/ide/` | `appgraph ide`'s default `--apps-root` |
 
 Every one of these has an explicit override flag — pass this repo's own
-`apps/<app>` (or any other path) instead when working inside a graph-code
-checkout, which is what graph-code's own development does throughout this
+`apps/<app>` (or any other path) instead when working inside a app-graph
+checkout, which is what app-graph's own development does throughout this
 guide's examples below.
 
 ## The convention every command assumes
@@ -96,7 +96,7 @@ app, or a library like `jwt_provider`) just has a single
 
 ## Command reference
 
-### `grafcode validate <graph.yaml>`
+### `appgraph validate <graph.yaml>`
 
 Loads one file and runs `validate_full()`: `acyclic()` always; the
 Two-Radical check if `enforce_two_radical: true`; `validate_events()` if the
@@ -106,7 +106,7 @@ for both levels — it looks at whether the file has an `imports:` block, no
 separate command needed:
 
 ```bash
-grafcode validate apps/todo/blueprint/backend.graph.yaml
+appgraph validate apps/todo/blueprint/backend.graph.yaml
 # OK — apps/todo/blueprint/backend.graph.yaml is valid (0 warning(s))
 ```
 
@@ -118,7 +118,7 @@ consumer's `consumer_requires` vs. the provider's `provider_guarantees`)
 after merging imports via `resolve_imports()`:
 
 ```bash
-grafcode validate apps/todo/blueprint/main.graph.yaml
+appgraph validate apps/todo/blueprint/main.graph.yaml
 ```
 
 An `optional: true` import whose file is missing produces a warning, not an
@@ -129,33 +129,33 @@ endpoint that doesn't actually exist, or with a mismatched contract.
 Warnings (e.g. `UNREACHABLE_STEP`) print but don't fail the command;
 `ToolFailed` (a hard error — a cycle, a broken call contract) exits 1.
 
-### `grafcode order <graph.yaml>`
+### `appgraph order <graph.yaml>`
 
 Prints the topological build order — the same order `build_component.spl`
 generates nodes in (mandatory-edge subgraph only; `enriched_by`/
 `optionally_depends_on` are ignored for ordering purposes).
 
 ```bash
-grafcode order apps/todo/blueprint/backend.graph.yaml
+appgraph order apps/todo/blueprint/backend.graph.yaml
 #   0  python
 #   1  fastapi
 #   2  requirements
 #   ...
 ```
 
-### `grafcode report <graph.yaml> [--out FILE]`
+### `appgraph report <graph.yaml> [--out FILE]`
 
 Quick counts — node/edge/import/event totals, without validating.
 
 ```bash
-grafcode report apps/todo/blueprint/main.graph.yaml
+appgraph report apps/todo/blueprint/main.graph.yaml
 ```
 
 `--out FILE` writes to a file instead of stdout (a bare filename with no
-directory component resolves under `~/graph-code/report/`) — same flag on
+directory component resolves under `~/app-graph/report/`) — same flag on
 `compare` and `drift`, below.
 
-### `grafcode prettify <path> [--write]`
+### `appgraph prettify <path> [--write]`
 
 Normalizes `*.graph.yaml` prose scalars (`defines`, `spec.interface`,
 `spec.contract`, `docs`, ...) into `|` block literals with one bullet per
@@ -163,14 +163,14 @@ Normalizes `*.graph.yaml` prose scalars (`defines`, `spec.interface`,
 single file or a directory searched recursively (e.g. `apps/`).
 
 ```bash
-grafcode prettify apps/todo/blueprint/backend.graph.yaml   # dry run: prints a diff
-grafcode prettify apps/ --write                             # rewrites every *.graph.yaml under apps/
+appgraph prettify apps/todo/blueprint/backend.graph.yaml   # dry run: prints a diff
+appgraph prettify apps/ --write                             # rewrites every *.graph.yaml under apps/
 ```
 
 Always dry-runs first (no `--write`) before rewriting a directory you
 haven't checked in yet — it touches every matching file under `PATH`.
 
-### `grafcode new-app <app_name> <backend_port> <frontend_port> [--apps-dir DIR]`
+### `appgraph new-app <app_name> <backend_port> <frontend_port> [--apps-dir DIR]`
 
 Scaffolds a new integrated (backend+frontend) app skeleton: `apps/<app_name>/blueprint/{settings,main,backend,frontend}.graph.yaml`
 stubs (each with `TODO:` markers and a worked-example pointer to
@@ -178,24 +178,24 @@ stubs (each with `TODO:` markers and a worked-example pointer to
 frontend's npm/vite project scaffold.
 
 ```bash
-grafcode new-app inventory 8020 5190
+appgraph new-app inventory 8020 5190
 ```
 
 Fails loudly (no silent overwrite) if `apps/inventory/` already exists and
 is non-empty. Next steps after scaffolding: fill in the `TODO:`s, author the
 real nodes (data_schema → db_connection → orm_model → crud_operations →
 api_routes is the established shape — see `apps/todo/blueprint/backend.graph.yaml`),
-then `grafcode validate apps/inventory/blueprint/main.graph.yaml`.
+then `appgraph validate apps/inventory/blueprint/main.graph.yaml`.
 
-### `grafcode extract` — reverse-engineer a blueprint from an existing repo
+### `appgraph extract` — reverse-engineer a blueprint from an existing repo
 
 The most involved command: AST/regex-analyzes an existing FastAPI+Vue-shaped
 repo and drafts blueprint artifacts from it, instead of hand-authoring from
 scratch.
 
 ```bash
-grafcode extract \
-  --repo-path ~/projects/wgong/graph-code-apps/fief \
+appgraph extract \
+  --repo-path ~/projects/wgong/app-graph-apps/fief \
   --output-dir apps/fief \
   --app-name fief \
   --backend-routes-dir fief/apps/api/routers \
@@ -222,8 +222,8 @@ file), `EXTRACTION.md` (a companion planning doc with `TODO:` sections for
 the functional description, use cases, and data model), and
 `blueprint/{settings,main,backend,frontend}.graph.yaml` stubs with `TODO:`
 markers wherever human or LLM judgment is required. Nothing is buildable
-until those are resolved and `grafcode validate` passes clean.
-`--output-dir` defaults to `~/graph-code/output/<app-name>` (created if
+until those are resolved and `appgraph validate` passes clean.
+`--output-dir` defaults to `~/app-graph/output/<app-name>` (created if
 missing) if you don't pass it — so a repeat extraction never silently
 overwrites an existing app; pass an explicit path (e.g. this repo's own
 `apps/<app-name>`) to write elsewhere, as the example above does.
@@ -241,7 +241,7 @@ for a large repo or a slow model.
 The semantic pass is **fail-fast by default** (`max_repair_attempts: 0` in
 `compile_blueprint.spl`): an invalid-YAML generation reports `FAILED`
 immediately instead of spending further LLM calls trying to self-repair —
-deliberate, while graph-code's own prompts are still being hardened, so a
+deliberate, while app-graph's own prompts are still being hardened, so a
 systematic generation bug surfaces on the first bad output rather than
 getting quietly retried away. For an INTEGRATED (backend+frontend+main)
 app, a failing component stops the whole pass immediately rather than
@@ -254,27 +254,27 @@ or — most commonly — a `--llm` pass that dies to a session/agent timeout or
 a transient provider error like `ModelOverloaded`). Rerunning the exact same
 command resumes instead of restarting from scratch, at two granularities:
 
-1. **Coarse** — `<output-dir>/.grafcode_cache/` persists the cloned repo
+1. **Coarse** — `<output-dir>/.appgraph_cache/` persists the cloned repo
    (for `--repo-url`), the AST-extraction results, and a marker for a
    *fully-completed* `--llm` pass. A rerun with the same inputs skips
    whichever stages already finished. Invalidates automatically if the
    source repo's scanned directories change (content signature, not just a
    flag).
 2. **Fine** — the `--llm` pass itself runs as a durable `spl3` workflow
-   (`--persistence sqlite` by default, both in `grafcode extract` and in
+   (`--persistence sqlite` by default, both in `appgraph extract` and in
    `spl3 run` itself), checkpointing every `GENERATE`/`CALL` step under a
    `--workflow-id` derived from the run's own inputs. If the pass dies
    partway through a repair loop (attempt 2 of 3, say), the rerun resumes
    from the last checkpoint instead of re-paying for attempts already made.
 
 ```bash
-grafcode extract ... --llm claude_cli:claude-sonnet-4-6   # crashes on attempt 2
+appgraph extract ... --llm claude_cli:claude-sonnet-4-6   # crashes on attempt 2
 
-grafcode extract ... --llm claude_cli:claude-sonnet-4-6   # same command — resumes
+appgraph extract ... --llm claude_cli:claude-sonnet-4-6   # same command — resumes
 ```
 
 Pass **`--skip-cache`** to force a fresh run at both granularities (ignores
-`.grafcode_cache/`, re-clones/re-scans, runs the `--llm` pass fresh) — use
+`.appgraph_cache/`, re-clones/re-scans, runs the `--llm` pass fresh) — use
 this if you've since edited the source repo in a way the content signature
 might not catch, or just want a genuine from-scratch attempt. It still
 *writes* fresh cache/checkpoints as it goes — under the hood it mints a
@@ -290,7 +290,7 @@ durability backend for the `--llm` pass alone, active even under
 `--skip-cache`; `sqlite` is zero-setup local durability
 (`~/.spl/workflows.db`), the other two are for production/cloud use.
 
-### `grafcode build TARGET [--input-dir DIR] [--output-dir DIR] [--tech-profile NAME] [--llm ADAPTER[:MODEL]]`
+### `appgraph build TARGET [--input-dir DIR] [--output-dir DIR] [--tech-profile NAME] [--llm ADAPTER[:MODEL]]`
 
 Generates code for an app or component from its blueprint — a thin wrapper
 that shells out to `spl3 run` the same way `extract --llm` does, just
@@ -298,14 +298,14 @@ targeting `build_app.spl`/`build_component.spl` instead of
 `compile_blueprint.spl`.
 
 ```bash
-grafcode build apps/todo/blueprint/main.graph.yaml
-grafcode build inventory --input-dir apps          # resolve by app name instead
+appgraph build apps/todo/blueprint/main.graph.yaml
+appgraph build inventory --input-dir apps          # resolve by app name instead
 ```
 
 `TARGET` is either a direct path to a `*.graph.yaml` file, or an app name
 resolved as `INPUT_DIR/<name>/blueprint/main.graph.yaml` (falling back to
 `component.graph.yaml` if there's no `main.graph.yaml`) — `--input-dir`
-defaults to `~/graph-code/input`. A target with an `imports:` block (a
+defaults to `~/app-graph/input`. A target with an `imports:` block (a
 system graph) is built via `build_app.spl` — every imported component, then
 `integrate_system.spl`; a target with none is built directly via
 `build_component.spl`, with `--tech-profile` (default `python_fastapi`)
@@ -314,11 +314,11 @@ naming its tech profile — ignored for a system target, where
 `--output-dir` writes generated code somewhere other than next to each
 component's own `graph.yaml` (the default) — useful for a fresh generation
 you don't want to overwrite an existing build with, e.g. to inspect it
-separately from an existing build. (`grafcode compare` and the IDE's Compare
+separately from an existing build. (`appgraph compare` and the IDE's Compare
 page, which used to diff two such directories file-by-file, have been
 removed — use a regular file diff tool, e.g. VS Code's compare view, instead.)
 
-### `grafcode ide [--api-port PORT] [--dev-port PORT] [--no-frontend] [--apps-root DIR]`
+### `appgraph ide [--api-port PORT] [--dev-port PORT] [--no-frontend] [--apps-root DIR]`
 
 Launches **Graph IDE**: a browser viewer *and editor* for an app's
 blueprint graph. Shortcut for the two-terminal `uvicorn` + `npm run dev`
@@ -327,11 +327,11 @@ dance in `tools/graph-ide/README.md` — starts the FastAPI backend
 Ctrl-C stopping both.
 
 ```bash
-grafcode ide --apps-root apps   # browse this repo's own example apps
+appgraph ide --apps-root apps   # browse this repo's own example apps
 # open http://localhost:8881
 ```
 
-Requires the graph-ide deps installed once: `pip install "grafcode[ide]"`
+Requires the graph-ide deps installed once: `pip install "appgraph[ide]"`
 (or `pip install -r tools/graph-ide/requirements.txt` in a repo checkout)
 for the FastAPI backend, and `npm install` in `tools/graph-ide/frontend/`
 for the Vite frontend — the one piece a plain `pip install` genuinely can't
@@ -340,9 +340,9 @@ provide, since it's npm packages, not Python ones. Use `--api-port`/
 alone (e.g. for scripted access to `GET /api/graphs?root=<app>`).
 
 `--apps-root DIR` sets the root directory Graph IDE browses `<app>/blueprint/`
-graphs under — defaults to `~/graph-code/ide` (created if missing, matching
-the rest of the `~/graph-code` workspace convention above). Pass this
-repo's `apps/` (as above) to browse graph-code's own example apps instead.
+graphs under — defaults to `~/app-graph/ide` (created if missing, matching
+the rest of the `~/app-graph` workspace convention above). Pass this
+repo's `apps/` (as above) to browse app-graph's own example apps instead.
 
 **In the browser**: pick an app from the dropdown (only apps with a
 `blueprint/*.graph.yaml` show up), click a node to see its full spec and
@@ -356,7 +356,7 @@ YAML directly. **⚙ Settings** holds a font-size control and a placeholder
 LLM provider/model/key section (not wired to anything yet); **ℹ About**
 has the node-kind legend plus the currently-loaded app's files/components.
 
-### `grafcode drift <graph_a.graph.yaml> <graph_b.graph.yaml> [--llm ADAPTER:MODEL] [--llm-timeout SECONDS] [--dims DIM,DIM,...] [--format text|json] [--out FILE]`
+### `appgraph drift <graph_a.graph.yaml> <graph_b.graph.yaml> [--llm ADAPTER:MODEL] [--llm-timeout SECONDS] [--dims DIM,DIM,...] [--format text|json] [--out FILE]`
 
 Computes a **drift report** between two blueprint graphs — the 5-component
 vector `docs/DEV/BUILD/blueprint-schema-v2.2.md` §3 defines for
@@ -369,7 +369,7 @@ never summed away as a substitute for them. Report-only: prints the report,
 doesn't write into either file.
 
 ```bash
-grafcode drift apps/todo/blueprint/backend.graph.yaml apps/kanban/blueprint/backend.graph.yaml --format json
+appgraph drift apps/todo/blueprint/backend.graph.yaml apps/kanban/blueprint/backend.graph.yaml --format json
 ```
 ```json
 {
@@ -413,7 +413,7 @@ judges instead). A faithful paraphrase should score near 0; a contradicted
 or missing rationale should score near 1.
 
 ```bash
-grafcode drift apps/fief/blueprint/backend.graph.yaml apps/fief/blueprint/backend.graph.yaml \
+appgraph drift apps/fief/blueprint/backend.graph.yaml apps/fief/blueprint/backend.graph.yaml \
   --llm claude_cli:claude-sonnet-4-6 --llm-timeout 300
 ```
 
@@ -424,30 +424,30 @@ without `intent` means no LLM call happens even if `--llm` is also passed.
 
 ```bash
 # only the two cheapest/most stable signals, no LLM call
-grafcode drift a.graph.yaml b.graph.yaml --dims structural,implementation
+appgraph drift a.graph.yaml b.graph.yaml --dims structural,implementation
 
 # just intent, isolated from the graph-diff components
-grafcode drift a.graph.yaml b.graph.yaml --dims intent --llm claude_cli:claude-sonnet-4-6
+appgraph drift a.graph.yaml b.graph.yaml --dims intent --llm claude_cli:claude-sonnet-4-6
 ```
 
 Use this once a `reverse`-provenance blueprint exists to compare against an
 `authored` one — e.g. after mining a blueprint back out of `apps/todo`'s own
-generated code via `grafcode extract --repo-path apps/todo/backend
+generated code via `appgraph extract --repo-path apps/todo/backend
 --output-dir /tmp/todo-reversed --app-name todo_backend_reversed`, then
-`grafcode drift apps/todo/blueprint/backend.graph.yaml
+`appgraph drift apps/todo/blueprint/backend.graph.yaml
 /tmp/todo-reversed/blueprint/component.graph.yaml`.
 
-### `grafcode tools clean-port <port> [port ...]`
+### `appgraph tools clean-port <port> [port ...]`
 
 Kills whatever process is listening on the given port(s) — SIGTERM every
 PID found via `lsof -t -i :PORT`, wait a second, SIGKILL anything still
-alive. Handy after a `grafcode ide`/dev server that didn't exit cleanly.
+alive. Handy after a `appgraph ide`/dev server that didn't exit cleanly.
 
 ```bash
-grafcode tools clean-port 8880 8881
+appgraph tools clean-port 8880 8881
 ```
 
-### `grafcode tools spl-lint [FILES...] [--fix]`
+### `appgraph tools spl-lint [FILES...] [--fix]`
 
 Finds/fixes unescaped single quotes inside `.spl` `CREATE FUNCTION` prompt
 bodies (`AS $$ ... $$`) — SPL dollar-quoted strings use SQL-style quote
@@ -455,8 +455,8 @@ escaping, so a literal apostrophe (`"don't"`, `"component's"`) must be
 written as `''` or it breaks parsing for everything after it in the file.
 
 ```bash
-grafcode tools spl-lint            # spl/*.spl by default
-grafcode tools spl-lint --fix      # auto-correct
+appgraph tools spl-lint            # spl/*.spl by default
+appgraph tools spl-lint --fix      # auto-correct
 ```
 
 Scope is deliberately narrow: only plain `AS $$ ... $$` blocks (LLM prompt
@@ -489,34 +489,34 @@ A token that's the *entire* string value resolves to the setting's own type
 (so an int stays an int); embedded in a larger string, it's stringified. A
 referenced key with no matching entry raises `ToolFailed` — never silently
 passes the literal `${{ ... }}` through. Settings are per-app: two apps'
-`settings.yaml` files never share a namespace. `grafcode new-app` scaffolds
+`settings.yaml` files never share a namespace. `appgraph new-app` scaffolds
 this file automatically.
 
 ## Typical workflows
 
-**Author a new app from scratch**: `grafcode new-app` → fill in the
+**Author a new app from scratch**: `appgraph new-app` → fill in the
 `TODO:`s in each `blueprint/*.graph.yaml`, using `apps/todo/blueprint/` as a
-worked example → `grafcode validate` until clean → `grafcode build
+worked example → `appgraph validate` until clean → `appgraph build
 apps/<app>/blueprint/main.graph.yaml`.
 
-**Reverse-engineer a blueprint from an existing repo**: `grafcode extract`
+**Reverse-engineer a blueprint from an existing repo**: `appgraph extract`
 (AST-only first, to see what it finds in `analysis.json`/`EXTRACTION.md`) →
 review/fill the `TODO:`s → optionally rerun with `--llm` for a first-draft
-spec pass → `grafcode validate` → review before building with `grafcode
+spec pass → `appgraph validate` → review before building with `appgraph
 build`. See `apps/README-new-apps.md` for a real example (the `fief`
 extraction).
 
-**Browse or hand-edit any app's graph**: `grafcode ide`, pick the app,
+**Browse or hand-edit any app's graph**: `appgraph ide`, pick the app,
 click around. Turn on Edit for small prose fixes without opening a YAML
 editor; drop back to the file directly for structural changes.
 
-**Keep prose formatting consistent**: `grafcode prettify apps/ --write`
+**Keep prose formatting consistent**: `appgraph prettify apps/ --write`
 after a batch of manual edits, before committing.
 
 ## Troubleshooting
 
-- **`grafcode: command not found`** — the install didn't put its console
-  scripts on `PATH` (check `pip show -f graph-code | grep Location`), or
+- **`appgraph: command not found`** — the install didn't put its console
+  scripts on `PATH` (check `pip show -f app-graph | grep Location`), or
   you're in a different environment than the one you installed into. In a
   repo checkout doing dev work, make sure it was `pip install -e ".[dev]"`.
 - **`extract --llm`/`build` fails with `semantic pass failed (exit ...)`/
@@ -527,13 +527,13 @@ after a batch of manual edits, before committing.
   Resumability above. If it's `spl3: command not found` instead, the
   `spl-llm` dependency didn't install correctly — `pip show spl-llm` to
   check.
-- **A specific app doesn't show up in `grafcode ide`'s dropdown** — it
+- **A specific app doesn't show up in `appgraph ide`'s dropdown** — it
   needs at least one `*.graph.yaml` directly under
   `<app>/blueprint/` under whatever `--apps-root` is in effect (default
-  `~/graph-code/ide`, or pass `--apps-root apps` for this repo's own
+  `~/app-graph/ide`, or pass `--apps-root apps` for this repo's own
   examples). A generated-output-only directory (no `blueprint/`) is
   correctly excluded, not a bug.
-- **`ToolFailed` on `grafcode validate`** — read the message; it's raised
+- **`ToolFailed` on `appgraph validate`** — read the message; it's raised
   before any LLM call by design (the signal to abort generation rather than
   spend tokens on a broken graph), most commonly a cycle in `form_graph`
   (should never happen — mandatory edges are always a DAG) or a call
