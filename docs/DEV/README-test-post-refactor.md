@@ -26,8 +26,9 @@ Expected versions:
 |---|---|---|---|
 | zinet | 0.2.2 | `zinet` | *zinet* |
 | graflang | **0.3.0** | `graflang` | *graf* |
-| workgraph | 0.2.0 (CHANGELOG says "Unreleased (0.3.0)") | `work-graph` | *workgraph* |
+| workgraph | 0.2.0 | `work-graph` | *workgraph* |
 | app-graph | 0.2.0 | `app-graph` | *appgraph* |
+| dd-llm | 0.2.0 | `dd-llm` |  |
 
 All four were reinstalled editable after the version change, so `pip check` should say nothing about them. If graflang still shows 0.2.1, or app-graph still asks for `graflang<0.3`, run `pip install -e graflang -e app-graph -e work-graph --no-deps`. app-graph and work-graph now require `graflang>=0.3.0`.
 
@@ -67,9 +68,9 @@ appgraph order apps/todo/blueprint/backend.graph.yaml             # 0 db_connect
 graf vis src/appgraph/recipes/build_component/build_component.graph.yaml -o /tmp/bc.html   # opens; LOOPs drawn as boxes
 ```
 
-- [ ] zinet suite passes (202)
-- [ ] build order of the todo backend is unchanged (as above)
-- [ ] `graf vis` draws a recipe
+- [x] zinet suite passes (202)
+- [x] build order of the todo backend is unchanged (as above)
+- [x] `graf vis` draws a recipe
 
 ---
 

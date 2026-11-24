@@ -17,6 +17,9 @@ agent working in this repo, see the root `CLAUDE.md`.
 ## Install
 
 ```bash
+conda create -n graf python=3.11
+conda activate graf
+
 pip install -e ".[dev]"   # from this repo's root (dev checkout)
 # or: pip install app-graph  (release install)
 appgraph --help            # sanity check

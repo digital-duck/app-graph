@@ -11,6 +11,7 @@ import sys
 from pathlib import Path
 
 import click
+from zinet.click_helpers import HELP_OPTION_NAMES, FullHelpGroup
 
 from . import graph_lib
 from .exceptions import ToolFailed
@@ -64,7 +65,7 @@ def _write_report(text: str, out: str | None) -> None:
     click.echo(f"Wrote report to {out_path}")
 
 
-@click.group()
+@click.group(cls=FullHelpGroup, context_settings={"help_option_names": HELP_OPTION_NAMES})
 def main() -> None:
     """appgraph — validate, extract, build, and inspect app-graph blueprint apps."""
 

@@ -14,7 +14,7 @@ dependencies = [
     "pyyaml>=6.0",
     "click>=8.1",
     "ruamel.yaml>=0.18",
-    "zinet>=0.2.2",           # the graph algorithms (order, learning path, reducibility) shared with GraphLang and work-graph
+    "zinet>=0.2.3",           # the graph algorithms (order, learning path, reducibility) shared with GraphLang and work-graph
     "graflang>=0.3.0,<0.4",   # the build/compile recipes run on the GraphLang runtime (package `graphlang`)
     "dd-llm>=0.2.0",          # the LLM adapters, shared with GraphLang and work-graph
 ]
