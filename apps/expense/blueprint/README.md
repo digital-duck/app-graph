@@ -21,7 +21,7 @@ The Vue.js frontend (`:5174`) communicates with the FastAPI backend (`:8001`) ov
 **Build** (generates all component source from the blueprints):
 
 ```bash
-spl3 run spl/build_app.spl --tools spl/tools.py -p system_yaml=apps/expense/blueprint/main.graph.yaml --llm claude_cli
+appgraph build apps/expense/blueprint/main.graph.yaml --llm claude_cli
 ```
 
 **Start the backend** (from `apps/expense/backend/`):

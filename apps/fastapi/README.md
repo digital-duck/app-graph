@@ -4,7 +4,7 @@ A FastAPI + SQLAlchemy 2.0 Item CRUD API — a single FastAPI backend persisted 
 
 ## Status
 
-See [apps/README.md](../README.md)'s `fastapi` row for build/test history. This README's build/run instructions reflect the 2026-08-14 framework refactor (`docs/DEV/BUILD/refactoring-plan-v1.md`) — app-scoped `settings.yaml`, de-prefixed backend node ids (`item_schemas`→`data_schema`, `orm_models`→`orm_model`) — which has not yet been verified against a real `spl3` build for this app.
+See [apps/README.md](../README.md)'s `fastapi` row for build/test history. This README's build/run instructions reflect the 2026-08-14 framework refactor (`docs/DEV/BUILD/refactoring-plan-v1.md`) — app-scoped `settings.yaml`, de-prefixed backend node ids (`item_schemas`→`data_schema`, `orm_models`→`orm_model`) — which has not yet been verified against a real `appgraph build` for this app.
 
 ## Architecture
 
@@ -15,43 +15,38 @@ A single FastAPI backend (port **8005**) with no frontend — CORS is left open 
 **1. Build** — generate and install the backend from the graph:
 
 ```bash
-spl3 run spl/build_app.spl \
-    --tools spl/tools.py \
-    -p system_yaml=apps/fastapi/blueprint/main.graph.yaml \
+appgraph build apps/fastapi/blueprint/main.graph.yaml \
     --llm claude_cli
 ```
 
 To generate a fresh copy of the app into a new directory instead of overwriting
-`apps/fastapi/backend` in place, add `-p output_dir=...`:
+`apps/fastapi/backend` in place, add `--output-dir`:
 
 ```bash
-mkdir -p logs/console
-spl3 run spl/build_app.spl \
-    --tools spl/tools.py \
-    -p system_yaml=apps/fastapi/blueprint/main.graph.yaml \
-    -p output_dir=apps/fastapi-v2 \
+appgraph build apps/fastapi/blueprint/main.graph.yaml \
+    --output-dir apps/fastapi-v2 \
     --llm claude_cli \
-    2>&1 | tee "logs/console/build_app-$(date +%Y-%m-%d-%H-%M-%S).md"
+    2>&1 | tee "build-$(date +%Y-%m-%d-%H-%M-%S).log"
 ```
 
 The `tee` keeps the console output live while also capturing it to a
-timestamped file under `logs/console/` — useful since a failed build's real
+timestamped file — useful since a failed build's real
 error (e.g. a `pytest`/SQLAlchemy traceback) often scrolls past the terminal
-buffer before you can read it, and `spl3`'s own log (path printed as `Log:`
-at the end of the run) captures the workflow trace but not the raw stdout.
+buffer before you can read it, and the run's own log (path printed as `[build] log:`
+at the end) captures the recipe trace but not the raw stdout.
 
-The component is then written to `{output_dir}/backend/` — i.e.
+The component is then written to `{output-dir}/backend/` — i.e.
 `apps/fastapi-v2/backend/` for the command above — leaving the existing
 `apps/fastapi/backend` untouched.
 
-See [docs/DEV/BUILD/README.md](../../docs/DEV/BUILD/README.md) §12.1 for full build options and §12.4 for `--output_dir` usage.
+Run `appgraph build -h` for all build options (`--max-llm-calls`, `--max-test-attempts`, `--no-cache`, ...); `appgraph validate fastapi/blueprint/main.graph.yaml` checks the blueprints first.
 
 **If a rebuild is needed after editing the blueprint** (e.g. iterating on a spec fix), clear the
 cache and any stale runtime SQLite files first, so the fix is guaranteed to actually regenerate
 rather than serve a stale cache hit:
 
 ```bash
-rm -rf apps/fastapi-v2/backend/.spl_cache
+rm -rf apps/fastapi-v2/backend/.agr_cache
 rm -f apps/fastapi-v2/backend/*.db
 ```
 

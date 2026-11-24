@@ -18,10 +18,10 @@ The Vue frontend (port 5177) communicates with the FastAPI backend (port 8004) o
 
 ## Running the full system
 
-Build the app with the SPL runner:
+Build the app with `appgraph build`:
 
 ```bash
-spl3 run spl/build_app.spl apps/fullstack/blueprint/main.graph.yaml
+appgraph build apps/fullstack/blueprint/main.graph.yaml
 ```
 
 Then start the backend and frontend in separate terminals:

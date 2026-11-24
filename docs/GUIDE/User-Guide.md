@@ -309,7 +309,7 @@ defaults to `~/app-graph/input`.
 
 - A target **without** `imports:` (one component) runs the
   **`build_component`** recipe. For each node in build order, it writes
-  the node's code (or takes it from `<output>/.spl_cache/`), checks the node
+  the node's code (or takes it from `<output>/.agr_cache/`), checks the node
   and its edges, and refines it once if a check fails. Then it runs the
   component's tests in Docker. On a failure, it repairs the node the failure
   points at and runs the tests again, up to `--max-test-attempts` (default
@@ -332,7 +332,7 @@ under `~/app-graph/logs/`.
 |---|---|
 | `--llm ADAPTER[:MODEL]` | the model for the run (default `claude_cli`) |
 | `--max-llm-calls N` | stops the build before N model calls (default: 4 per node + 1 per test attempt + 2) |
-| `--no-cache` | regenerates every node instead of reusing `.spl_cache/`. The cache is the same one graph-code wrote, so an app built by graph-code rebuilds here with no model calls. |
+| `--no-cache` | regenerates every node instead of reusing `.agr_cache/`. graph-code's `.spl_cache/` has the same keys and layout, so renaming it to `.agr_cache` lets an app built by graph-code rebuild here with no model calls. |
 | `--output-dir` | writes the code somewhere other than next to each component's `graph.yaml` (useful for a fresh generation beside an existing build) |
 
 ### `appgraph ide [--api-port PORT] [--dev-port PORT] [--no-frontend] [--apps-root DIR]`

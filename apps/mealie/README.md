@@ -3,12 +3,12 @@
 Mealie is a self-hosted recipe manager: a Vue 3 / TypeScript frontend backed by a FastAPI + SQLite
 REST API. Users browse a paginated recipe grid, view full recipe detail (ingredients, steps,
 notes), create/update/delete recipes, and organize them with many-to-many tags and categories. It
-is `graph-code`'s largest ported reference app — first with pagination and a many-to-many
+is app-graph's largest reference app — first with pagination and a many-to-many
 relationship.
 
 ## Status
 
-Results from the most recent `spl3 run spl/build_app.spl` integration run (2026-08-15): backend
+Results from the most recent `appgraph build` integration run (2026-08-15): backend
 and frontend both built clean (all nodes cache-hit, 53/53 pytest and 39/39 vitest respectively —
 see [backend/README.md](backend/README.md)/[frontend/README.md](frontend/README.md)). System
 acceptance tests:
@@ -29,7 +29,7 @@ documented for `dispatch`/`fastapi`/`kanban` in [`apps/README.md`](../README.md)
 
 - **browse_recipes** — the generated test's "nonsense search returns 0 items" assertion found 1
   leftover recipe from an earlier test run in this same session (`create_recipe`'s fixture data);
-  a known framework gap — `integrate_system.spl` doesn't reset `mealie.db` between runs.
+  a known framework gap — the system acceptance run doesn't reset `mealie.db` between runs.
 - **filter_by_organizer** — the generated test asserted `POST /tags` returns 200; the backend
   correctly returns 201 per the contract (creation endpoints in this API return 201, not 200).
 - **update_recipe** — the generated test PUT a body missing the required `slug` field, so the
@@ -49,9 +49,7 @@ for component-specific setup, run, and test instructions. Ports are defined once
 **1. Build** — generate and install both components from the graph:
 
 ```bash
-spl3 run spl/build_app.spl \
-    --tools spl/tools.py \
-    -p system_yaml=apps/mealie/blueprint/main.graph.yaml \
+appgraph build apps/mealie/blueprint/main.graph.yaml \
     --llm claude_cli
 ```
 

@@ -1,6 +1,6 @@
 # Candidate apps for Path-B ingestion
 
-> **Note (app-graph 0.2.0):** this page was carried over from graph-code. The build history below was recorded with graph-code's `spl3` pipeline, and the commands it quotes (`spl3 run spl/...`, `grafcode ...`) are kept as they were run. To build today, run `appgraph build apps/<app>/blueprint/main.graph.yaml`, which uses the GraphLang recipes (see `docs/GUIDE/User-Guide.md`). The per-node `.spl_cache/` from those runs is still read.
+> **Note (app-graph 0.2.0):** this page was carried over from graph-code. The build history below was recorded with graph-code's `spl3` pipeline (so names like `spl/tools.py` and `integrate_system.spl` in the narrative are the old ones); the commands are updated to the current CLI. To build today, run `appgraph build apps/<app>/blueprint/main.graph.yaml`, which uses the GraphLang recipes (see `docs/GUIDE/User-Guide.md`). The per-node cache folder is now `.agr_cache/` (graph-code's `.spl_cache/` has the same layout: rename it to reuse it).
 
 
 Currently ingested (`apps/SPL/*`): todo, expense, fastapi, fullstack, kanban,
@@ -37,7 +37,7 @@ new extractor rather than reuse of the existing one.
 
 ## Next step
 
-`extract_path_b.py`'s functionality is now available as `grafcode extract
+`extract_path_b.py`'s functionality is now available as `appgraph extract
 --repo-path ... --output-dir ... --app-name ...` (see this repo's root
 `CLAUDE.md`). Run it against Fief first — it slots straight into the
 existing FastAPI/Pydantic/SQLAlchemy extraction path with zero adaptation
@@ -54,12 +54,12 @@ see cloned apps locally at `$HOME/projects/wgong/graph-code-apps/`
 - cloned from `https://github.com/hvlds/todo` and strip off docker dependency
 
 ```bash
-cd $HOME/projects/digital-duck/graph-code
-conda activate spl123
+cd $HOME/projects/digital-duck/app-graph
+conda activate graf
 
 export APP_NAME=todo1
 
-grafcode extract \
+appgraph extract \
   --repo-path $HOME/projects/wgong/graph-code-apps/$APP_NAME \
   --output-dir apps/$APP_NAME \
   --app-name $APP_NAME \
@@ -75,22 +75,19 @@ grafcode extract \
 
 
 export APP_NAME=todo1 
-grafcode extract --repo-path $HOME/projects/wgong/graph-code-apps/$APP_NAME --output-dir apps/$APP_NAME --app-name $APP_NAME --backend-routes-dir server --backend-schema-dir server --backend-models-dir server --backend-services-dir server --frontend-components-dir client/src/components --backend-port 8010 --frontend-port 5180 --llm claude_cli:claude-sonnet-4-6 --llm-timeout 900
+appgraph extract --repo-path $HOME/projects/wgong/graph-code-apps/$APP_NAME --output-dir apps/$APP_NAME --app-name $APP_NAME --backend-routes-dir server --backend-schema-dir server --backend-models-dir server --backend-services-dir server --frontend-components-dir client/src/components --backend-port 8010 --frontend-port 5180 --llm claude_cli:claude-sonnet-4-6 --llm-timeout 900
 ```
 
-**Build — DONE (2026-08-15/16), first `grafcode extract`-sourced app to complete the full
-pipeline.** `apps/todo1/blueprint/main.graph.yaml` validates clean (`grafcode validate`):
+**Build — DONE (2026-08-15/16), first `appgraph extract`-sourced app to complete the full
+pipeline.** `apps/todo1/blueprint/main.graph.yaml` validates clean (`appgraph validate`):
 
 ```bash
-cd $HOME/projects/digital-duck/graph-code
-conda activate spl123
+cd $HOME/projects/digital-duck/app-graph
+conda activate graf
 
-mkdir -p logs/console
-spl3 run spl/build_app.spl \
-    --tools spl/tools.py \
-    -p system_yaml=apps/todo1/blueprint/main.graph.yaml \
+appgraph build apps/todo1/blueprint/main.graph.yaml \
     --llm claude_cli --llm-timeout 900 \
-    2>&1 | tee "logs/console/build_app-todo1-$(date +%Y-%m-%d-%H-%M-%S).md"
+    2>&1 | tee "build-todo1-$(date +%Y-%m-%d-%H-%M-%S).log"
 ```
 
 Writes into `apps/todo1/backend/` and `apps/todo1/frontend/`, then runs `integrate_system.spl`
@@ -103,7 +100,7 @@ calls (full cache hit). Getting there needed real fixes to the extraction pipeli
 just this app's blueprint — see `apps/README.md`'s todo1 row for the full list (dangling
 `needs.backend` references silently resolving to zero endpoint context, `.spl_cache` staleness
 after hand-patching generated files, a CORS port bug only caught by manual `curl` testing, and a
-largely-fabricated auto-generated `README.md` since hand-corrected). Two new `grafcode validate`
+largely-fabricated auto-generated `README.md` since hand-corrected). Two new `appgraph validate`
 checks (`validate_needs()`, `unreachable_applications()`) exist because of bugs this app's own
 blueprint had. Two more bugs surfaced only by an actual manual browser test (nothing else loads a
 real page): `vite.config.ts` missing `server.port` (defaulted to Vite's `5173` instead of the
@@ -126,12 +123,12 @@ functional. See `apps/todo1/README.md` for exact run commands (backend
   with todo1's 8010/5180.
 
 ```bash
-cd $HOME/projects/digital-duck/graph-code
-conda activate spl123
+cd $HOME/projects/digital-duck/app-graph
+conda activate graf
 
 export APP_NAME=todo2A
 
-grafcode extract \
+appgraph extract \
   --repo-path $HOME/projects/wgong/graph-code-apps/$APP_NAME \
   --output-dir apps/$APP_NAME \
   --app-name $APP_NAME \
@@ -154,17 +151,12 @@ through" under Fief, below; the same two-layer resumability applies here.
 ##### Build
 
 ```bash
-cd $HOME/projects/digital-duck/graph-code
-conda activate spl123
+cd $HOME/projects/digital-duck/app-graph
+conda activate graf
 
-mkdir -p logs/console
-
-export APP_NAME=todo2A
-spl3 run spl/build_app.spl \
-    --tools spl/tools.py \
-    -p system_yaml=apps/$APP_NAME/blueprint/main.graph.yaml \
+appgraph build apps/$APP_NAME/blueprint/main.graph.yaml \
     --llm claude_cli --llm-timeout 900 \
-    2>&1 | tee "logs/console/build_app-$APP_NAME-$(date +%Y-%m-%d-%H-%M-%S).md"
+    2>&1 | tee "build-$APP_NAME-$(date +%Y-%m-%d-%H-%M-%S).log"
 ```
 
 ##### Node version (frontend build blocker)
@@ -196,7 +188,7 @@ source "$HOME/.nvm/nvm.sh"
 # project from jumping to Node 24):
 nvm install 22
 
-# Make it the default for every new shell (otherwise `grafcode ide`/`spl3`
+# Make it the default for every new shell (otherwise `appgraph ide`/`spl3`
 # subprocess calls that spawn a fresh shell keep picking v22.9.0):
 nvm alias default 22
 
@@ -260,7 +252,7 @@ imports cross a sub-component boundary instead of just a top-level component bou
 
 **What this is not yet:** three real pieces of work, none started —
 
-1. **`grafcode extract` has no clustering logic.** It emits one flat node list per component
+1. **`appgraph extract` has no clustering logic.** It emits one flat node list per component
    today. Clustering by which router/repo *file* a node came from (the AST scan already has this
    information — `routers/auth.py` vs `routers/task.py` vs `routers/user.py`) into separate
    sub-component graphs is new extraction logic, not a config flag.
@@ -268,7 +260,7 @@ imports cross a sub-component boundary instead of just a top-level component bou
    render everything flattened with sub-components in place unless taught to show only a
    collapsed sub-component (its exported ports) with drill-down, rather than always fully
    expanding every import.
-3. **Build pipeline untested at this nesting depth.** `spl/build_app.spl`/`build_component.spl`
+3. **Build pipeline untested at this nesting depth.** The `build_app`/`build_component` recipes
    have been exercised against the two-level `main → backend/frontend` shape; arbitrary-depth
    nesting (`main → backend → auth/task/user`) needs verification, not assumed to just work.
 
@@ -278,10 +270,10 @@ plenty of hand-authoring — validates the `imports:`-at-any-depth mechanism and
 `check_call_contracts()` across sub-component boundaries with a real app before investing in
 extractor clustering logic.
 
-##### Prototype: `grafcode tools suggest-graph-clusters` (2026-08-17)
+##### Prototype: `appgraph tools suggest-graph-clusters` (2026-08-17)
 
-Item 1 above ("`grafcode extract` has no clustering logic") now has a working, mechanical
-prototype — `suggest_clusters()` in `graph_lib.py`, exposed as `grafcode tools
+Item 1 above ("`appgraph extract` has no clustering logic") now has a working, mechanical
+prototype — `suggest_clusters()` in `graph_lib.py`, exposed as `appgraph tools
 suggest-graph-clusters <graph.yaml> [--seed NODE_ID ...] [--format text|json]`. It's a graph
 algorithm, not an LLM heuristic, consistent with graph-code's general preference for surfacing
 mechanical facts over guessing (`docs/PAPER/subsection-cs-duality-and-vibe-coding.md` §5): no
@@ -352,22 +344,22 @@ say about it (expected, not a gap).
 (used by `auth_views+task_view`); `app_shell` is `unclustered` (the composition root again).
 
 **What this closes, and what it still doesn't:** this validates that the proposed split above is
-mechanically discoverable, not just hand-drawn — a real signal that `grafcode extract` could
+mechanically discoverable, not just hand-drawn — a real signal that `appgraph extract` could
 eventually run this over a freshly-extracted monolithic component graph and emit the sub-component
 split automatically. It does **not** yet: (a) name the resulting clusters (it reports node sets,
 not `auth.graph.yaml` vs `task.graph.yaml` — naming is still a human/LLM step), (b) decide where a
 `shared` node's *file* should live (report only — same "report but don't decide" contract as
-`grafcode drift`), or (c) wire into `grafcode extract` itself — it's a standalone `tools` command
+`appgraph drift`), or (c) wire into `appgraph extract` itself — it's a standalone `tools` command
 today, not yet called from the extraction pipeline. Tests: `tests/test_graph_lib.py`'s
 `TestSuggestClusters` (7 cases, including the `auth`-not-core regression case above).
 
 ### Extract "Fief"
 
 ```bash
-cd $HOME/projects/digital-duck/graph-code
-conda activate spl123
+cd $HOME/projects/digital-duck/app-graph
+conda activate graf
 
-grafcode extract \
+appgraph extract \
   --repo-path $HOME/projects/wgong/graph-code-apps/fief \
   --output-dir apps/fief \
   --app-name fief \
@@ -387,13 +379,13 @@ first attempt — `ModelOverloaded` on the third repair-loop attempt of the
 rerun the exact same command. No flags need to change — resumability is on
 by default at two layers:
 
-- `apps/fief/.grafcode_cache/` remembers the AST-extraction scan, so the
+- `apps/fief/.appgraph_cache/` remembers the AST-extraction scan, so the
   rerun doesn't re-walk `fief/apps/api/routers` etc. from scratch.
-- The `--llm` pass itself runs as a durable `spl3` workflow (`--persistence
-  sqlite` is the default in both `grafcode extract` and `spl3 run` itself),
-  checkpointing every `GENERATE`/`CALL` step under a `--workflow-id` derived
-  from this command's own inputs — so the rerun resumes attempt 2 instead of
-  re-paying for attempts 0-1.
+- The `--llm` pass itself runs as the `compile_blueprint` GraphLang recipe with
+  a checkpoint (`--persistence checkpoint`, the default in `appgraph extract`:
+  `llm-<key>.checkpoint.json` under the cache folder) that resumes after the last
+  top-level step — so the rerun resumes attempt 2 instead of re-paying for
+  attempts 0-1.
 
 Pass `--skip-cache` to force a fully clean run instead (e.g. if you've since
 edited the source repo and want a genuine from-scratch re-extraction).

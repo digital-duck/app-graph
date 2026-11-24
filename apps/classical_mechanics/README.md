@@ -1,7 +1,7 @@
 # classical_mechanics
 
 A ConceptBook curriculum tracing classical mechanics from four primitives (position, time, mass,
-force) through five lessons to the normal-mode analysis of coupled oscillators. `graph-code`'s
+force) through five lessons to the normal-mode analysis of coupled oscillators. app-graph's
 reference fixture for the `curriculum` domain type: first/second-radical primitives,
 `enforce_two_radical`, and an ordered concept-dependency chain to a capstone — the schema
 machinery `enforce_two_radical`/`reducible(first_radical_only=True)` exist to check.
@@ -10,7 +10,7 @@ machinery `enforce_two_radical`/`reducible(first_radical_only=True)` exist to ch
 
 `curriculum` domain, `curriculum` tech profile (Markdown lesson prose, not source code), single
 standalone component — **no `main.graph.yaml`**: a curriculum has no HTTP layer and nothing else
-to integrate with, so it's built directly via `build_component.spl`. Built, **5/5 pytest passing**
+to integrate with, so it's built directly with `appgraph build` (the `build_component` recipe). Built, **5/5 pytest passing**
 against a hand-authored `tests/test_derivations.py` that independently re-derives each lesson's
 result with `sympy` rather than parsing the generated prose. See [`apps/README.md`](../README.md)'s
 `classical_mechanics` fixtures-table row for full build history.
@@ -46,9 +46,8 @@ checks it against the corresponding generated lesson. To rebuild from the bluepr
 just running the existing tests:
 
 ```bash
-spl3 run spl/build_component.spl --tools spl/tools.py \
-    -p component_graph=apps/classical_mechanics/blueprint/classical_mechanics.graph.yaml \
-    -p tech_profile=curriculum \
-    -p output_dir=apps/classical_mechanics/conceptbook \
+appgraph build apps/classical_mechanics/blueprint/classical_mechanics.graph.yaml \
+    --tech-profile curriculum \
+    --output-dir apps/classical_mechanics/conceptbook \
     --llm claude_cli
 ```

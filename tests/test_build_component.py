@@ -1,7 +1,7 @@
 """The build_component recipe against graph-code's verified todo backend (the Phase 3 parity guard).
 
 A scripted model answers each write_node prompt with the code graph-code generated and verified for that node (its
-.spl_cache, in tests/fixtures/todo_backend). The recipe must write the same files and the suite must pass in the test
+.spl_cache, now .agr_cache, in tests/fixtures/todo_backend). The recipe must write the same files and the suite must pass in the test
 container. Needs Docker and the appgraph-verify:py3.12 image (skipped otherwise).
 """
 from __future__ import annotations

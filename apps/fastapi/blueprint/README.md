@@ -22,7 +22,7 @@ Single FastAPI backend running at `:8005`, no frontend — see [backend/README.m
 **Build** (generate and install the backend from the blueprint):
 
 ```bash
-spl3 run spl/build_app.spl apps/fastapi/blueprint/main.graph.yaml
+appgraph build apps/fastapi/blueprint/main.graph.yaml
 ```
 
 **Start the backend:**

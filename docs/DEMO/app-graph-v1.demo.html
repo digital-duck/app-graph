@@ -1,0 +1,529 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>app-graph</title>
+<style>
+  :root {
+    --ink: #1c2330; --muted: #5b6678; --paper: #fbfbfa; --line: #dfe3ea;
+    --blue: #4f8df5; --gray: #8a919c; --green: #2e9e6b; --orange: #e8913a; --red: #d8473f;
+    --code-bg: #0f1623; --code-ink: #dbe4f3;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: #e9ebef; color: var(--ink);
+    font: 26px/1.42 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  .deck { position: fixed; inset: 0 0 4.5vh 0; display: grid; place-items: center; }
+  .slide { display: none; width: min(96vw, 158vh); height: min(54vw, 89vh); background: var(--paper);
+    border-radius: 14px; box-shadow: 0 8px 40px rgba(20,30,50,.18); padding: 4.2% 5.5% 3.5%;
+    flex-direction: column; overflow: hidden; position: relative; }
+  .slide.on { display: flex; }
+  h1 { font-size: 2.5em; line-height: 1.1; margin: 0 0 .3em; letter-spacing: -.02em; }
+  h2 { font-size: 1.7em; margin: 0 0 .5em; letter-spacing: -.01em; }
+  h2::after { content: ""; display: block; width: 64px; height: 4px; background: var(--blue); border-radius: 2px; margin-top: .25em; }
+  h3 { font-size: 1.05em; margin: 0 0 .3em; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .06em; }
+  p { margin: 0 0 .6em; }
+  ul { margin: 0; padding-left: 1.1em; }
+  li { margin: .3em 0; }
+  li > ul { font-size: .82em; margin-top: .1em; }
+  li::marker { color: var(--blue); }
+  .sub { color: var(--muted); font-size: 1.15em; }
+  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 3%; align-items: start; flex: 1; min-height: 0; }
+  .cols.wide-left { grid-template-columns: 1.25fr 1fr; }
+  .cols.wide-right { grid-template-columns: 1fr 1.25fr; }
+  pre, code { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+  code { background: #eef0f4; padding: .05em .35em; border-radius: 4px; font-size: .88em; }
+  pre { background: var(--code-bg); color: var(--code-ink); padding: .7em .9em; border-radius: 10px; font-size: .66em; line-height: 1.45;
+    margin: 0 0 .6em; overflow: hidden; white-space: pre; }
+  pre .c { color: #7d8ba3; } pre .k { color: #8cc4ff; } pre .s { color: #a5e3b4; } pre .h { color: #ffcf7a; }
+  .card { background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: .6em .9em; }
+  .tag { display: inline-block; font-size: .62em; font-weight: 700; padding: .12em .6em; border-radius: 99px; color: #fff; vertical-align: middle; }
+  .t-gen { background: var(--blue); } .t-io { background: var(--gray); } .t-sol { background: var(--green); }
+  .t-ctl { background: var(--orange); } .t-safe { background: var(--red); }
+  table { border-collapse: collapse; width: 100%; font-size: .92em; }
+  th, td { text-align: left; padding: .35em .6em; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; font-size: .85em; text-transform: uppercase; letter-spacing: .05em; }
+  .big { font-size: 1.5em; line-height: 1.3; }
+  .center { text-align: center; }
+  .grow { flex: 1; min-height: 0; }
+  .foot { position: absolute; left: 5.5%; right: 5.5%; bottom: 1.8%; display: flex; justify-content: space-between;
+    color: #9aa3b2; font-size: .5em; }
+  .foot a { color: inherit; text-decoration: underline; }
+  .refs a { color: var(--blue); display: block; }
+  .refs li { font-size: .78em; }
+  .quiet { color: var(--muted); }
+  .good { color: var(--green); font-weight: 600; } .bad { color: var(--red); font-weight: 600; }
+  .demo { border-left: 6px solid var(--orange); background: #fff6ea; border-radius: 0 10px 10px 0; padding: .5em .9em; margin-bottom: .7em; font-size: .85em; }
+  .demo b { color: var(--orange); letter-spacing: .06em; font-size: .8em; text-transform: uppercase; }
+  .stack > * { margin-bottom: .45em; }
+  svg { max-width: 100%; height: auto; }
+  svg text { font: 600 13px system-ui, sans-serif; }
+  #bar { position: fixed; left: 0; top: 0; height: 4px; background: var(--blue); width: 0; transition: width .2s; z-index: 5; }
+  #nav { position: fixed; left: 50%; bottom: 8px; transform: translateX(-50%); display: flex; gap: 6px; z-index: 6; }
+  #nav button { font: 600 14px system-ui, sans-serif; min-width: 44px; padding: 6px 12px; border-radius: 8px; border: 1px solid #c9ced8;
+    background: #fff; color: var(--ink); cursor: pointer; }
+  #nav button:hover { background: #eef2fb; border-color: var(--blue); }
+  #nav button:disabled { opacity: .4; cursor: default; background: #fff; border-color: #c9ced8; }
+  #nav #pdf { margin-left: 10px; }
+  #nav #tocbtn { margin-right: 10px; }
+  #hud { position: fixed; right: 14px; bottom: 10px; font-size: 13px; color: #7d8696; z-index: 5; }
+  .toc { columns: 3; column-gap: 3%; list-style: none; margin: 0; padding: 0; font-size: .8em; }
+  .toc li { break-inside: avoid; margin: .22em 0; padding: .12em .3em; border-radius: 6px; cursor: pointer; display: flex; gap: .6em; }
+  .toc li:hover { background: #eef2fb; }
+  .toc .n { color: var(--blue); font-weight: 700; min-width: 1.6em; text-align: right; }
+  .notes { display: none; }
+  #notes-box { display: none; }
+  body.show-notes #notes-box { display: block; position: fixed; left: 0; right: 0; bottom: 0; max-height: 34vh; overflow: auto;
+    background: #141a26; color: #d7deeb; padding: 14px 6vw; font-size: 17px; line-height: 1.5; z-index: 9; }
+  @page { size: 13.333in 7.5in; margin: 0; }
+  @media print {
+    html, body { background: #fff; height: auto; font-size: 24px; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .deck { position: static; display: block; }
+    .slide { display: flex !important; width: 13.333in; height: 7.5in; border-radius: 0; box-shadow: none; break-after: page; page-break-after: always; }
+    .slide:last-child { break-after: auto; page-break-after: auto; }
+    pre { font-size: .58em; }       /* the page is smaller than the screen: keep code lines inside their box */
+    #bar, #hud, #nav, .notes, #notes-box { display: none !important; }
+  }
+</style>
+</head>
+<body data-title="app-graph">
+<div id="bar"></div>
+<div id="nav">
+  <button id="tocbtn" title="Outline (T)">TOC</button>
+  <button id="first" title="First slide (Home)">&lt;&lt;</button>
+  <button id="prev" title="Previous slide (←)">&lt;</button>
+  <button id="next" title="Next slide (→ or space)">&gt;</button>
+  <button id="last" title="Last slide (End)">&gt;&gt;</button>
+  <button id="pdf" title="Opens the print dialog: choose Save as PDF, landscape, margins None, and tick Background graphics">PDF</button>
+</div>
+<div id="hud">← → or space · T outline · F fullscreen · N notes · O overview</div>
+<div class="deck" id="deck">
+<section class="slide">
+  <div style="margin:auto 0">
+    <h1>app-graph</h1>
+    <p class="big">Build application from <code>graph.yaml</code> blueprint.</p>
+    <br>
+    <p class="quiet" style="margin-top:3.2em"><a href="mailto:wen.gong.research@gmail.com" style="color:inherit">wen.gong.research@gmail.com</a></p>
+  </div>
+  <div class="foot"><span><a href="https://github.com/digital-duck/app-graph" target="_blank" rel="noopener">https://github.com/digital-duck/app-graph</a></span><span></span></div>
+  <aside class="notes">app-graph is an app builder. You describe an app, or a curriculum, as a graph blueprint. app-graph validates it and generates tested code from it with an LLM.</aside>
+</section>
+
+<section class="slide" id="outline">
+  <h2>Outline</h2>
+  <ol class="toc" id="toc"></ol>
+  <aside class="notes">The outline lists every slide title; click a line to jump.</aside>
+</section>
+
+<section class="slide">
+  <h2>The problem: code and design drift apart</h2>
+  <div class="cols wide-left">
+    <ul>
+      <li>We built a real todo app as two parts, a backend and a frontend, from their blueprints.</li>
+      <li>The frontend's <code>toggleTodo</code> came out as <b>PATCH</b>. The backend and the frontend's own declared contract both said <code>PUT</code>.</li>
+      <li>The <code>VITE_API_BASE_URL</code> setting was missing, so the frontend quietly fetched <code>undefined/todos</code>.</li>
+      <li>Each component's own tests passed. <b>Neither bug was caught</b> until the two ran together.</li>
+    </ul>
+    <div class="card stack">
+      <h3>Two integration bugs</h3>
+      <div>✔ backend tests passed</div>
+      <div>✔ frontend tests passed</div>
+      <div>The system was still broken</div>
+    </div>
+  </div>
+  <aside class="notes">This happened in a real build of the todo app. Both bugs only showed up when the two components ran as one system. This kind of drift between the code and the declared design is what the project is built to catch.</aside>
+</section>
+
+<section class="slide">
+  <h2>The idea: the graph comes first</h2>
+  <ul>
+    <li>A <b>blueprint</b> is a graph of typed nodes and edges in the <i>Unified Duality Graph Schema v2.1+</i>.</li>
+    <li>The implementation is generated from the graph. The graph is <b>not a diagram drawn from existing code</b>.</li>
+    <li>It is based on the <b>form/function duality</b>. Form is structure and composition, and it never cycles.</li>
+    <li>Function is behaviour and interaction, and it may cycle (feedback, recursion).</li>
+    <li>One schema serves several targets: curriculum prose as well as software.</li>
+  </ul>
+  <aside class="notes">The design rests on one principle taken from natural science: every system has a form and a function. Form relationships are acyclic, so a DAG models them. Function relationships may contain cycles.</aside>
+</section>
+
+<section class="slide">
+  <h2>Two graphs in one GraphDomain</h2>
+  <table>
+    <tr><th>Graph</th><th>Holds</th><th>Direction</th><th>May cycle?</th></tr>
+    <tr><td><code>form_graph</code></td><td>Primitives and <code>form.nodes</code>: the <i>what</i> (components, docs, steps)</td><td><code>dep → node</code></td><td>No, always a DAG</td></tr>
+    <tr><td><code>event_graph</code></td><td>Bipartite graph of nodes and events: the reactive behaviour</td><td><code>node → event</code>, <code>event → node</code></td><td>Yes</td></tr>
+  </table>
+  <p>Every parsed graph becomes a <code>GraphDomain</code>, built by <code>load_domain()</code> in <code>src/appgraph/loader.py</code>.</p>
+  <aside class="notes">The loader turns each YAML file into one GraphDomain that holds two graphs. The form graph sets the build order, so it must be acyclic. The event graph describes reactive behaviour and is allowed to have cycles.</aside>
+</section>
+
+<section class="slide">
+  <h2>What a node carries</h2>
+  <div class="cols">
+    <div class="card stack">
+      <h3>Read by a build</h3>
+      <div><code>spec.interface</code></div>
+      <div><code>spec.contract</code></div>
+      <div><code>verification</code></div>
+    </div>
+    <div class="card stack">
+      <h3>Edges</h3>
+      <div>Mandatory: <code>composed_of</code>, <code>depends_on</code></div>
+      <div>Optional: <code>enriched_by</code>, <code>optionally_depends_on</code></div>
+      <div>App level: <code>needs</code></div>
+    </div>
+  </div>
+  <aside class="notes">A build uses the interface, the contract and the verification fields to generate each node and test it. Optional edges have their own fields instead of a boolean flag. The needs field states a dependency at the application level.</aside>
+</section>
+
+<section class="slide">
+  <h2>Five domain_type profiles</h2>
+  <table>
+    <tr><th>Profile</th><th>Meaning</th><th>Example under <code>apps/</code></th></tr>
+    <tr><td><code>curriculum</code></td><td>a course or curriculum</td><td><code>classical_mechanics</code></td></tr>
+    <tr><td><code>software</code></td><td>one software component</td><td><code>todo</code> (backend, frontend)</td></tr>
+    <tr><td><code>reactive_app</code></td><td>event-driven</td><td><code>physics_app</code></td></tr>
+    <tr><td><code>integrated</code></td><td>a graph of graphs: <code>main.graph.yaml</code> imports components</td><td><code>todo</code></td></tr>
+    <tr><td><code>workflow</code></td><td>action-routed <code>function.transitions</code>, cycles allowed</td><td><code>etl_workflow</code></td></tr>
+  </table>
+  <aside class="notes">One schema and one pipeline shape cover all five profiles. The curriculum and software profiles have both been built for real, and the outputs were tested. Each profile has an example blueprint in the apps folder.</aside>
+</section>
+
+<section class="slide">
+  <h2>Checks before any model call</h2>
+  <div class="cols wide-left">
+    <ul>
+      <li><code>validate_full()</code> runs the <b>acyclic</b> check, the <b>Two-Radical</b> check, events, call contracts and transitions.</li>
+      <li>On a hard failure it raises <code>ToolFailed</code>, <b>before</b> any LLM call.</li>
+      <li>Warnings that are not fatal come back as <code>ValidationWarning</code>.</li>
+      <li>Example: mealie's <b>11 frontend↔backend call contracts</b> were confirmed correct before any code was generated.</li>
+    </ul>
+    <pre><span class="c"># the system and every import</span>
+appgraph validate \
+  apps/todo/blueprint/main.graph.yaml</pre>
+  </div>
+  <aside class="notes">Validation is pure Python and makes no model call. It has caught real authoring mistakes at no cost. Stopping with an error before generation is cheaper than finding the problem after it.</aside>
+</section>
+
+<section class="slide">
+  <h2>From graph-code to app-graph</h2>
+  <div class="cols">
+    <div class="card stack">
+      <h3>graph-code (<code>grafcode</code> 0.1.1)</h3>
+      <div>LLM workflows were <code>.spl</code> scripts</div>
+      <div>run by <code>spl3</code></div>
+      <div>left unchanged</div>
+    </div>
+    <div class="card stack">
+      <h3>app-graph</h3>
+      <div>LLM workflows are <b>GraphLang recipes</b></div>
+      <div>you can validate, draw, cap, checkpoint and log them</div>
+      <div>model calls go through <code>dd-llm</code>, tests run in Docker</div>
+    </div>
+  </div>
+  <p>The blueprint schema, the graph library and the CLI did not change. The migration is recorded in <code>docs/DEV/graflang-refactor.md</code>.</p>
+  <aside class="notes">app-graph continues graph-code, and only the engine changed. Each recipe is now itself a graph, so the same tooling applies to it. graph-code stays as it was.</aside>
+</section>
+
+<section class="slide">
+  <h2>Three recipes</h2>
+  <table>
+    <tr><th>Recipe</th><th>Used by</th><th>What it does</th></tr>
+    <tr><td><code>build_component</code></td><td><code>build</code> on a component</td><td>For each node in build order: write, cache, check the node and its edges, refine once if needed. Then test, and repair the failing node up to <code>--max-test-attempts</code> times.</td></tr>
+    <tr><td><code>build_app</code></td><td><code>build</code> on a graph with <code>imports:</code></td><td>Runs <code>build_component</code> per component, then writes and runs acceptance tests against the live backend and writes the README. Stops at the first failure.</td></tr>
+    <tr><td><code>compile_blueprint</code></td><td><code>extract --llm</code></td><td>Classifies the repo's shape, drafts one blueprint or three, then validates, repairs and writes each one.</td></tr>
+  </table>
+  <aside class="notes">All three recipes are in src/appgraph/recipes. The deterministic steps, such as reading, caching, writing, verifying and testing, are plain Python functions in appgraph.build. A recipe calls them as a tool step.</aside>
+</section>
+
+<section class="slide">
+  <h2>Rules every recipe follows</h2>
+  <ul>
+    <li>Each prompt is a <b>file</b> under the recipe's <code>prompts/</code> folder.</li>
+    <li>Every step that writes files first passes a <b>Cedar policy</b> (<code>policies/*.cedar</code>). Writes are allowed only under your home folder or the temporary folder.</li>
+    <li>Every run has a <b>cap on model calls</b> and writes a log under <code>~/app-graph/logs/</code>.</li>
+    <li>Code is cached per node in <code>&lt;output&gt;/.spl_cache/</code>. Both graph-code and app-graph can read this cache.</li>
+    <li><code>extract --llm</code> keeps a checkpoint, so a pass that died partway resumes where it stopped.</li>
+  </ul>
+  <aside class="notes">These rules apply to every recipe, not just one. The call cap and the logs keep spending visible. The cache means unchanged nodes are not generated again.</aside>
+</section>
+
+<section class="slide">
+  <h2>Tests in containers with no network</h2>
+  <div class="cols">
+    <div class="card stack">
+      <h3>Python components</h3>
+      <div>image <code>appgraph-verify:py3.12</code></div>
+      <div>built once, by hand</div>
+    </div>
+    <div class="card stack">
+      <h3>Vue components</h3>
+      <div>image <code>appgraph-verify-node:&lt;hash&gt;</code>, from <code>node:22</code></div>
+      <div>made from the component's <code>package-lock.json</code></div>
+      <div>built automatically the first time</div>
+    </div>
+  </div>
+  <p>Nothing is mounted from your disk. The code goes in on <b>stdin</b>, and the containers have no network access.</p>
+  <aside class="notes">Generated code is never run directly on your machine. A Vue component needs a lockfile, so run npm install once in its folder. Because nothing is mounted, the container cannot touch your files.</aside>
+</section>
+
+<section class="slide">
+  <h2>Blueprints record where they came from (v2.2)</h2>
+  <div class="cols">
+    <pre><span class="k">blueprint:</span>
+  id: todo_app_backend
+  schema_version: <span class="s">"2.2"</span>
+  domain_type: software
+  provenance: <span class="h">authored</span>
+  parent_blueprint: null
+  <span class="k">lineage:</span>
+    - pass: forward
+      model: claude-sonnet-4-6
+      adapter: claude_cli
+      prompt_hash: <span class="s">"sha256:ab34…"</span>
+      timestamp: <span class="s">"2026-08-11T14:02:11Z"</span></pre>
+    <ul>
+      <li><code>provenance</code> is one of <code>authored</code>, <code>build</code>, <code>reverse</code> or <code>roundtrip</code>.</li>
+      <li><code>parent_blueprint</code> names the blueprint this one was derived from.</li>
+      <li><code>lineage:</code> is <b>append-only</b>, with one entry per pass.</li>
+      <li>Every field is optional. A v2.1 graph parses as before.</li>
+    </ul>
+  </div>
+  <aside class="notes">Schema v2.2 adds a block that makes the blueprint an object with a history. The lineage log ties any drift to a specific model and configuration. The addition is purely additive.</aside>
+</section>
+
+<section class="slide">
+  <h2>Drift between two blueprints</h2>
+  <div class="cols wide-left">
+    <ul>
+      <li><code>appgraph drift &lt;graph_a&gt; &lt;graph_b&gt;</code> reports five components in this order: <b>intent, behavior, structural, interface, implementation</b>.</li>
+      <li><code>structural</code>, <code>interface</code>, <code>behavior</code> and <code>implementation</code> are graph diffs matched by node id.</li>
+      <li><code>intent</code> is judged by the model given with <code>--llm</code>, in one dd-llm call. Without <code>--llm</code> it is absent.</li>
+      <li><code>--dims</code> limits which components run.</li>
+      <li>The report is <b>only printed</b>. Nothing is written back to either blueprint.</li>
+    </ul>
+    <div class="card stack">
+      <h3>Order, top-down</h3>
+      <div>intent: why</div>
+      <div>behavior: what it should do</div>
+      <div>structural: how it is shaped</div>
+      <div>interface: how it is exposed</div>
+      <div>implementation: how it is built</div>
+    </div>
+  </div>
+  <aside class="notes">The order goes from the most abstract component down to the concrete one: concept before mechanism. Four components are free graph diffs. Only intent needs a model.</aside>
+</section>
+
+<section class="slide">
+  <h2>Example: the todo app</h2>
+  <div class="cols">
+    <div>
+      <pre><span class="k">$</span> appgraph order \
+    apps/todo/blueprint/backend.graph.yaml
+0 db_connection
+1 requirements
+2 data_schema
+3 orm_model
+<span class="c">...</span></pre>
+    </div>
+    <ul>
+      <li>An earlier real build (graph-code, <code>claude_cli</code>) passed <b>22/22</b> backend tests and <b>14/14</b> frontend tests.</li>
+      <li>In the recipe tests, the todo backend comes out <b>byte for byte the same</b> in 7 model calls.</li>
+      <li>When the cache has it, it takes <b>0</b> calls.</li>
+    </ul>
+  </div>
+  <aside class="notes">The build order comes straight from the form graph. The 22 and 14 test results come from the first real round-trip build. The byte-for-byte check compares the new recipes with graph-code's output, using a scripted model.</aside>
+</section>
+
+<section class="slide">
+  <h2>Demo</h2>
+  <pre><span class="c"># 1. check the system and every import</span>
+appgraph validate apps/todo/blueprint/main.graph.yaml
+
+<span class="c"># 2. build one component, capped at 12 model calls</span>
+appgraph build apps/jwt_provider/blueprint/component.graph.yaml \
+  --max-llm-calls 12
+
+<span class="c"># 3. browse every app's graph</span>
+appgraph ide --apps-root apps</pre>
+  <div class="demo"><b>Demo</b> Run validate, start the capped build and watch its log, then open the Graph IDE.</div>
+  <aside class="notes">Validate makes no model call. Build calls the model through claude_cli by default and needs Docker. The IDE starts a backend on port 8880 and a frontend on port 8881.</aside>
+</section>
+
+<section class="slide">
+  <h2>Reverse pass: repo to blueprint</h2>
+  <ul>
+    <li><code>appgraph extract</code> scans an existing repo with AST and regex rules: FastAPI routes, Pydantic schemas, SQLAlchemy models, Vue components and more.</li>
+    <li>It writes draft blueprints with <code>TODO:</code> markers, by default to <code>~/app-graph/output/&lt;app-name&gt;</code>.</li>
+    <li><code>--llm</code> adds the <code>compile_blueprint</code> recipe. Its output is tagged <code>provenance: reverse</code>.</li>
+    <li><code>--max-llm-calls</code> caps the pass (default 20), and <code>--skip-cache</code> starts it again from scratch.</li>
+    <li><code>fief</code> is a real example: <code>apps/fief/EXTRACTION.md</code>.</li>
+  </ul>
+  <aside class="notes">The forward pass turns a blueprint into code, and the reverse pass turns code into a blueprint. Each draft is validated and repaired up to two times by default. If no tech profile fits, the pass also writes a draft profile for you to review.</aside>
+</section>
+
+<section class="slide">
+  <h2>The appgraph CLI at a glance</h2>
+  <div class="cols">
+    <table>
+      <tr><th>Command</th><th>Purpose</th></tr>
+      <tr><td><code>validate</code></td><td><code>validate_full()</code> on a file, or on every graph in a folder</td></tr>
+      <tr><td><code>order</code></td><td>print <code>build_order()</code></td></tr>
+      <tr><td><code>report</code></td><td>node, edge and import counts</td></tr>
+      <tr><td><code>extract</code></td><td>draft blueprints from a repo</td></tr>
+    </table>
+    <table>
+      <tr><th>Command</th><th>Purpose</th></tr>
+      <tr><td><code>build</code></td><td>generate and test a component or a whole app</td></tr>
+      <tr><td><code>drift</code></td><td>the 5-component drift report</td></tr>
+      <tr><td><code>ide</code></td><td>launch Graph IDE</td></tr>
+      <tr><td><code>agr</code></td><td>short alias for <code>appgraph</code></td></tr>
+    </table>
+  </div>
+  <aside class="notes">Other commands exist too: prettify, diagram, new-app and some small tools. Only build, extract with --llm and drift with --llm call a model. Everything else is the schema and algorithms library.</aside>
+</section>
+
+<section class="slide">
+  <h2>How to try it</h2>
+  <pre>pip install app-graph        <span class="c"># Python 3.11 or later</span>
+
+<span class="c"># once, from a checkout: the Python test image</span>
+docker build -t appgraph-verify:py3.12 \
+  -f src/appgraph/docker/python.Dockerfile \
+  src/appgraph/docker</pre>
+  <ul>
+    <li>Choose a model with <code>--llm ADAPTER[:MODEL]</code>. The default is <code>claude_cli</code>.</li>
+    <li>Output goes under <code>~/app-graph/</code>: <code>input</code>, <code>output</code>, <code>report</code>, <code>ide</code> and <code>logs</code>.</li>
+    <li>Override with <code>--output-dir</code>, <code>--input-dir</code>, <code>--out</code> or <code>--apps-root</code>.</li>
+  </ul>
+  <aside class="notes">From a checkout, use pip install -e with the dev extras instead. The full command reference is in the User Guide. These folders are created the first time they are used.</aside>
+</section>
+
+<section class="slide">
+  <h2>Running the project's tests</h2>
+  <div class="cols">
+    <pre>pytest                    <span class="c"># about 2 minutes with Docker</span>
+pytest -k <span class="s">"contract"</span> -v   <span class="c"># by keyword</span></pre>
+    <ul>
+      <li>The recipe tests use a <b>scripted model</b>, so they make no real LLM calls.</li>
+      <li>The build tests need Docker and the <code>appgraph-verify:py3.12</code> image. They are <b>skipped</b> when Docker is absent.</li>
+      <li>The recipes are checked against graph-code's own output.</li>
+    </ul>
+  </div>
+  <aside class="notes">The suite costs nothing in model calls. Pytest is already configured in pyproject.toml. Without Docker the suite still runs, but the build tests are skipped.</aside>
+</section>
+
+<section class="slide">
+  <h2>What is not done yet</h2>
+  <ul>
+    <li>Drift is <b>never written back</b> to a blueprint's <code>drift:</code> block. The report is only printed.</li>
+    <li><code>parent_blueprint</code> is <b>not enforced</b> by the parser, even when <code>provenance</code> is <code>reverse</code> or <code>roundtrip</code>.</li>
+    <li>The project is marked <b>Alpha</b> (version 0.2.0).</li>
+    <li>The IDE's Vue frontend needs a manual, one-time <code>npm install</code>.</li>
+    <li>The reverse pass has <b>one real example</b> so far: <code>fief</code>.</li>
+  </ul>
+  <aside class="notes">The forward pass works for components and for integrated apps. The round-trip measurement is only partly in place. A future validate_full check could enforce parent_blueprint, but that check does not exist yet.</aside>
+</section>
+
+<section class="slide">
+  <h2>References</h2>
+  <ul class="refs">
+    <li><a href="https://github.com/digital-duck/app-graph">app-graph repository</a></li>
+    <li><a href="https://github.com/digital-duck/graph-code">graph-code (grafcode 0.1.1)</a></li>
+    <li><a href="https://github.com/digital-duck/graflang">GraphLang</a></li>
+    <li>Command reference: <code>docs/GUIDE/User-Guide.md</code></li>
+    <li>Blueprint schema v2.2: <code>docs/DEV/BUILD/blueprint-schema-v2.2.md</code></li>
+    <li>The GraphLang migration: <code>docs/DEV/graflang-refactor.md</code></li>
+  </ul>
+  <aside class="notes">The last three are files in the app-graph repository. Start with the User Guide. For agents working in the repo, CLAUDE.md has a shorter version.</aside>
+</section>
+
+<section class="slide">
+  <div style="margin:auto 0">
+    <h1>Questions?</h1>
+    <p class="sub"><a href="https://github.com/digital-duck/app-graph" target="_blank" rel="noopener">https://github.com/digital-duck/app-graph</a></p>
+  </div>
+  <aside class="notes">Thank you. I'm happy to take questions about the schema, the recipes or the drift report.</aside>
+</section>
+</div>
+
+<script>
+(function () {
+  // the outline slide is built from the other slides' titles, so it cannot drift when a slide is added or renamed
+  (function () {
+    const all = [...document.querySelectorAll('.slide')], toc = document.getElementById('toc');
+    if (!toc) return;
+    all.forEach((sl, k) => {
+      const h = sl.querySelector('h2');
+      if (!h || sl === toc.closest('.slide')) return;
+      const li = document.createElement('li');
+      li.innerHTML = '<span class="n">' + (k + 1) + '</span><span>' + h.innerHTML + '</span>';
+      li.onclick = e => { e.stopPropagation(); window.__show && window.__show(k); };
+      toc.appendChild(li);
+    });
+  })();
+  const slides = [...document.querySelectorAll('.slide')];
+  const bar = document.getElementById('bar');
+  let i = Math.min(Math.max(parseInt(location.hash.slice(1), 10) - 1 || 0, 0), slides.length - 1);
+  let overview = false;
+
+  function notesBox() {
+    let box = document.getElementById('notes-box');
+    if (!box) { box = document.createElement('div'); box.id = 'notes-box'; document.body.appendChild(box); }
+    const aside = slides[i].querySelector('.notes');
+    box.innerHTML = aside ? aside.innerHTML : '';
+  }
+  function show(n) {
+    i = Math.min(Math.max(n, 0), slides.length - 1);
+    slides.forEach((s, k) => s.classList.toggle('on', k === i));
+    ['first', 'prev'].forEach(id => document.getElementById(id).disabled = i === 0);
+    ['next', 'last'].forEach(id => document.getElementById(id).disabled = i === slides.length - 1);
+    bar.style.width = ((i + 1) / slides.length * 100) + '%';
+    history.replaceState(null, '', '#' + (i + 1));
+    notesBox();
+    // page number in the corner of every slide but the first
+    slides.forEach((s, k) => {
+      let f = s.querySelector('.foot');
+      if (!f && k > 0) { f = document.createElement('div'); f.className = 'foot'; f.innerHTML = '<span></span><span></span>'; f.firstElementChild.textContent = document.body.dataset.title; s.appendChild(f); }
+      if (f && k > 0) f.lastElementChild.textContent = (k + 1) + ' / ' + slides.length;
+    });
+  }
+  window.__show = show;
+  function toggleOverview() {
+    overview = !overview;
+    const deck = document.getElementById('deck');
+    if (overview) {
+      deck.style.cssText = 'position:static;display:grid;grid-template-columns:repeat(3,1fr);gap:14px;padding:14px;place-items:start';
+      slides.forEach((s, k) => { s.classList.add('on'); s.style.cssText = 'width:100%;height:auto;aspect-ratio:16/9;font-size:9px;cursor:pointer'; s.onclick = () => { toggleOverview(); show(k); }; });
+      document.documentElement.style.overflow = 'auto'; document.body.style.overflow = 'auto';
+    } else {
+      deck.style.cssText = '';
+      slides.forEach(s => { s.style.cssText = ''; s.onclick = null; });
+      document.documentElement.style.overflow = ''; document.body.style.overflow = '';
+      show(i);
+    }
+  }
+  const go = (id, f) => document.getElementById(id).addEventListener('click', e => { e.stopPropagation(); if (!overview) f(); });
+  const outline = Math.max(0, slides.findIndex(s => s.id === 'outline'));
+  go('tocbtn', () => show(outline)); go('first', () => show(0)); go('prev', () => show(i - 1)); go('next', () => show(i + 1)); go('last', () => show(slides.length - 1));
+  document.getElementById('pdf').addEventListener('click', () => { if (overview) toggleOverview(); window.print(); });
+  document.addEventListener('keydown', e => {
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    if (['ArrowRight', 'PageDown', ' ', 'Enter'].includes(e.key)) { e.preventDefault(); if (!overview) show(i + 1); }
+    else if (['ArrowLeft', 'PageUp', 'Backspace'].includes(e.key)) { e.preventDefault(); if (!overview) show(i - 1); }
+    else if (e.key === 't' || e.key === 'T') { if (!overview) show(outline); }
+    else if (e.key === 'Home') show(0);
+    else if (e.key === 'End') show(slides.length - 1);
+    else if (e.key === 'f' || e.key === 'F') { document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen(); }
+    else if (e.key === 'n' || e.key === 'N') document.body.classList.toggle('show-notes');
+    else if (e.key === 'o' || e.key === 'O' || e.key === 'Escape' && overview) toggleOverview();
+  });
+  document.addEventListener('click', e => {
+    if (overview || e.target.closest('a, button, pre')) return;
+    show(e.clientX > innerWidth / 2 ? i + 1 : i - 1);
+  });
+  show(i);
+})();
+</script>
+</body>
+</html>

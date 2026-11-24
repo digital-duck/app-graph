@@ -11,7 +11,7 @@ import sys
 from pathlib import Path
 
 import click
-from zinet.click_helpers import HELP_OPTION_NAMES, FullHelpGroup
+from zinet.click_helpers import HELP_OPTION_NAMES, FullHelpGroup, version_option
 
 from . import graph_lib
 from .exceptions import ToolFailed
@@ -66,6 +66,7 @@ def _write_report(text: str, out: str | None) -> None:
 
 
 @click.group(cls=FullHelpGroup, context_settings={"help_option_names": HELP_OPTION_NAMES})
+@version_option("app-graph", "appgraph")
 def main() -> None:
     """appgraph — validate, extract, build, and inspect app-graph blueprint apps."""
 
@@ -74,17 +75,8 @@ def main() -> None:
 # validate
 # ---------------------------------------------------------------------------
 
-@main.command(short_help="Validate a graph.yaml, and its whole system if it has imports.")
-@click.argument("graph_yaml", type=click.Path(exists=True, dir_okay=False))
-def validate(graph_yaml: str) -> None:
-    """Validate a graph.yaml, and its whole system if it has imports.
-
-    A component graph (no imports:) just runs validate_full() on itself. A
-    system graph (has imports:, e.g. main.graph.yaml) additionally validates
-    every imported component and checks cross-component call contracts
-    (function.calls consumer_requires vs provider_guarantees) — no separate
-    command needed, the imports: block is the signal.
-    """
+def _validate_one(graph_yaml: str) -> None:
+    """Validate one graph.yaml; if it has imports:, its whole system too (see `validate`)."""
     try:
         graph = load_domain(graph_yaml)
     except ToolFailed as e:
@@ -1192,7 +1184,7 @@ def extract(
               help="Stop the build before this many model calls. Default: 4 per blueprint node + one per test attempt + 2.")
 @click.option("--max-test-attempts", type=int, default=3, show_default=True,
               help="Test runs (each failure gets one repair of the node it points at).")
-@click.option("--no-cache", "no_cache", is_flag=True, help="Regenerate every node instead of reusing <output>/.spl_cache.")
+@click.option("--no-cache", "no_cache", is_flag=True, help="Regenerate every node instead of reusing <output>/.agr_cache.")
 def build(target: str, input_dir: Path | None, output_dir: Path | None,
           tech_profile: str, llm: str, llm_timeout: int | None, max_llm_calls: int | None,
           max_test_attempts: int, no_cache: bool) -> None:
@@ -1658,26 +1650,8 @@ def _discover_all_graphs(root: Path) -> list[Path]:
     return sorted(found)
 
 
-@main.command("validate-all", short_help="Validate every graph.yaml under a directory tree.")
-@click.argument("root", type=click.Path(exists=True, path_type=Path))
-@click.option("--fail-fast", is_flag=True, help="Stop at the first failure.")
-@click.option("--format", "fmt", type=click.Choice(["text", "json"]), default="text",
-              show_default=True)
-@click.option("--out", default=None, metavar="FILE",
-              help="Write report to FILE instead of stdout.")
-def validate_all(root: Path, fail_fast: bool, fmt: str, out: str | None) -> None:
-    """Validate every graph.yaml under ROOT and print a pass/fail table.
-
-    Finds both conceptbook-style graph.yaml files (in */input/ directories)
-    and app-graph-style *.graph.yaml blueprints. Exits 1 if any file fails.
-
-    Useful for batch-checking a cb-* repo after bulk edits (e.g. adding
-    diagram: hints) or after porting changes across multiple repos.
-
-    Examples:
-      appgraph validate-all ~/projects/digital-duck/cb-algorithms/public/domains/
-      appgraph validate-all ~/projects/digital-duck/ --format json --out report.json
-    """
+def _validate_tree(root: Path, fail_fast: bool, fmt: str, out: str | None) -> None:
+    """Validate every graph.yaml / *.graph.yaml under ROOT and print a pass/fail table (exit 1 if any fails)."""
     if root.is_file():
         # Convenience: accept a single file too
         files = [root]
@@ -1750,6 +1724,51 @@ def validate_all(root: Path, fail_fast: bool, fmt: str, out: str | None) -> None
 
     if any_fail:
         sys.exit(1)
+
+
+@main.command(short_help="Validate a graph.yaml (and its system), or every graph under a folder.")
+@click.argument("path", type=click.Path(exists=True, path_type=Path))
+@click.option("--fail-fast", is_flag=True, help="Folder mode: stop at the first failure.")
+@click.option("--format", "fmt", type=click.Choice(["text", "json"]), default="text", show_default=True,
+              help="Folder mode: report format.")
+@click.option("--out", default=None, metavar="FILE", help="Folder mode: write the report to FILE instead of stdout.")
+def validate(path: Path, fail_fast: bool, fmt: str, out: str | None) -> None:
+    """Validate a graph.yaml, or every graph under a folder.
+
+    PATH is a file or a folder.
+
+    A file: a component graph (no imports:) just runs validate_full() on
+    itself. A system graph (has imports:, e.g. main.graph.yaml) additionally
+    validates every imported component and checks cross-component call
+    contracts (function.calls consumer_requires vs provider_guarantees); the
+    imports: block is the signal.
+
+    A folder: finds every conceptbook-style graph.yaml and app-graph-style
+    *.graph.yaml blueprint under it, validates each on its own, and prints a
+    pass/fail table (--format json for a machine-readable one, --out FILE to
+    save it). Exits 1 if any file fails. Useful after bulk edits or after
+    porting changes across repos.
+
+    \b
+    Examples:
+      appgraph validate apps/todo/blueprint/main.graph.yaml
+      appgraph validate apps
+      appgraph validate ~/projects/digital-duck/ --format json --out report.json
+    """
+    if path.is_dir():
+        _validate_tree(path, fail_fast, fmt, out)
+    else:
+        _validate_one(str(path))
+
+
+@main.command("validate-all", hidden=True, deprecated=True)
+@click.argument("root", type=click.Path(exists=True, path_type=Path))
+@click.option("--fail-fast", is_flag=True)
+@click.option("--format", "fmt", type=click.Choice(["text", "json"]), default="text")
+@click.option("--out", default=None, metavar="FILE")
+def validate_all(root: Path, fail_fast: bool, fmt: str, out: str | None) -> None:
+    """Deprecated alias of `validate ROOT`."""
+    _validate_tree(root, fail_fast, fmt, out)
 
 
 # ---------------------------------------------------------------------------

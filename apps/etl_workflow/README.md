@@ -1,7 +1,7 @@
 # etl_workflow
 
 A three-step data pipeline (fetch → transform → load) with bounded retry logic on fetch failure
-and a dedicated error-handling branch when retries are exhausted. It's `graph-code`'s reference
+and a dedicated error-handling branch when retries are exhausted. It's app-graph's reference
 fixture for the `workflow` domain type: `entry:`, `pre`/`execute`/`post` phases per step, a
 bounded retry loop, and action-routed transitions (`function.transitions`) that may cycle, unlike
 the acyclic `form_graph` every other domain type uses.
@@ -11,8 +11,8 @@ the acyclic `form_graph` every other domain type uses.
 `workflow` domain, `python_library` tech profile, single standalone component — **no
 `main.graph.yaml`**, by design (see the comment block at the top of
 [`blueprint/etl_workflow.graph.yaml`](blueprint/etl_workflow.graph.yaml)): a workflow graph has no
-other components to integrate with, so it's built directly via `build_component.spl` rather than
-the `build_app.spl` → `integrate_system.spl` pipeline the multi-component apps use. Built,
+other components to integrate with, so it's built directly with `appgraph build` (the `build_component` recipe) rather than
+the `build_app` recipe the multi-component apps use. Built,
 **23/23 pytest passing**. See [`apps/README.md`](../README.md)'s `etl_workflow` fixtures-table row
 for full build history.
 
@@ -52,9 +52,8 @@ pytest tests/
 Expect `23 passed`. To rebuild from the blueprint instead of just running the existing tests:
 
 ```bash
-spl3 run spl/build_component.spl --tools spl/tools.py \
-    -p component_graph=apps/etl_workflow/blueprint/etl_workflow.graph.yaml \
-    -p tech_profile=python_library \
-    -p output_dir=apps/etl_workflow/etl_workflow \
+appgraph build apps/etl_workflow/blueprint/etl_workflow.graph.yaml \
+    --tech-profile python_library \
+    --output-dir apps/etl_workflow/etl_workflow \
     --llm claude_cli
 ```

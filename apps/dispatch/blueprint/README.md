@@ -24,7 +24,7 @@ Single FastAPI backend running at `http://localhost:8006` — see [apps/dispatch
 **1. Build the backend**
 
 ```bash
-spl3 run spl/build_app.spl apps/dispatch/blueprint/main.graph.yaml
+appgraph build apps/dispatch/blueprint/main.graph.yaml
 ```
 
 **2. Start the backend**

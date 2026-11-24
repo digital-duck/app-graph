@@ -1,7 +1,7 @@
 # physics_app
 
 An `integrated` system that composes a reactive physics simulator with optional JWT-verifying
-auth middleware — `graph-code`'s reference fixture for graph-of-graphs composition: `imports:`,
+auth middleware — app-graph's reference fixture for graph-of-graphs composition: `imports:`,
 `optionally_depends_on:` (auth is optional, required only for the web deployment), and a real
 cross-graph `function.calls` contract (`app_shell.render_simulator` → `simulator.
 calculate_velocity`), verified with zero warnings by `check_call_contracts()`.
@@ -25,14 +25,14 @@ main.graph.yaml (app_shell)
 
 ## Status
 
-`integrated` domain at the system level, but **deliberately never run through `build_app.spl`**
+`integrated` domain at the system level, but **deliberately never built as a system** (`appgraph build` on `main.graph.yaml` runs the `build_app` recipe)
 (see the comment block at the top of [`blueprint/main.graph.yaml`](blueprint/main.graph.yaml)):
 unlike the ported reference apps (`todo`, `kanban`, ...), this system has no HTTP server anywhere
-in its component tree — both components are plain Python libraries — and `build_app.spl`
-unconditionally runs `integrate_system.spl` last, which assumes a live backend to start and REST
+in its component tree — both components are plain Python libraries — and the `build_app` recipe
+unconditionally runs the acceptance tests last, which assume a live backend to start and REST
 `applications:` to acceptance-test. `main.graph.yaml`'s own `app_shell` node has no `spec:` (same
 convention as `todo`'s `todo_app_shell`) — system-shell nodes aren't independently code-generated,
-so each component is built directly via its own `build_component.spl` run instead. See
+so each component is built directly with `appgraph build <component graph>` instead. See
 [`apps/README.md`](../README.md)'s `physics_app`/`physics_simulator`/`auth_middleware`
 fixtures-table rows for full build history.
 
@@ -72,16 +72,14 @@ cd apps/physics_app/auth_middleware && pytest tests/      # expect 9 passed
 To rebuild either component from its blueprint instead of just running the existing tests:
 
 ```bash
-spl3 run spl/build_component.spl --tools spl/tools.py \
-    -p component_graph=apps/physics_app/blueprint/physics_simulator.graph.yaml \
-    -p tech_profile=python_library \
-    -p output_dir=apps/physics_app/physics_simulator \
+appgraph build apps/physics_app/blueprint/physics_simulator.graph.yaml \
+    --tech-profile python_library \
+    --output-dir apps/physics_app/physics_simulator \
     --llm claude_cli
 
-spl3 run spl/build_component.spl --tools spl/tools.py \
-    -p component_graph=apps/physics_app/blueprint/auth_middleware.graph.yaml \
-    -p tech_profile=python_library \
-    -p output_dir=apps/physics_app/auth_middleware \
+appgraph build apps/physics_app/blueprint/auth_middleware.graph.yaml \
+    --tech-profile python_library \
+    --output-dir apps/physics_app/auth_middleware \
     --llm claude_cli
 ```
 
@@ -89,5 +87,5 @@ To check the system-level graph itself (imports, contracts, acyclicity) without 
 code:
 
 ```bash
-grafcode validate-system apps/physics_app/blueprint/main.graph.yaml
+appgraph validate apps/physics_app/blueprint/main.graph.yaml
 ```

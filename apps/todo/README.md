@@ -1,6 +1,6 @@
 # Todo App
 
-A full-stack task management application built with a Vue.js frontend and a FastAPI backend persisted to SQLite. The app lets users create, view, toggle, and delete todo items through a reactive single-page interface — no account or authentication required. It is designed as a reference implementation of an `integrated` graph-code domain, assembling independently deployable backend and frontend software components into one working product.
+A full-stack task management application built with a Vue.js frontend and a FastAPI backend persisted to SQLite. The app lets users create, view, toggle, and delete todo items through a reactive single-page interface — no account or authentication required. It is designed as a reference implementation of an `integrated` app-graph blueprint, assembling independently deployable backend and frontend software components into one working product.
 
 ## Status
 
@@ -17,51 +17,49 @@ The Vue.js frontend (port **5173**) communicates with the FastAPI backend (port 
 
 ## Running the full system
 
-**1. Build** — generate and install both components from the graph:
+**1. Build** — generate and test both components from the blueprint with `appgraph build` (the `build_app` recipe: every component in order, stopping at the first that fails, then the acceptance tests against the live backend). Python tests run in the `appgraph-verify:py3.12` Docker image and Vue tests in a per-lockfile node image, both without network; see the build notes in [CLAUDE.md](../../CLAUDE.md).
 
 ```bash
-spl3 run spl/build_app.spl \
-    --tools spl/tools.py \
-    -p system_yaml=apps/todo/blueprint/main.graph.yaml \
-    --llm claude_cli
+appgraph build apps/todo/blueprint/main.graph.yaml --llm claude_cli
 ```
 
 To generate a fresh copy of the app into a new directory instead of overwriting
-`apps/todo/backend`/`apps/todo/frontend` in place, add `-p output_dir=...`:
+`apps/todo/backend`/`apps/todo/frontend` in place, add `--output-dir`:
 
 ```bash
-mkdir -p logs/console
-spl3 run spl/build_app.spl \
-    --tools spl/tools.py \
-    -p system_yaml=apps/todo/blueprint/main.graph.yaml \
-    -p output_dir=apps/todo-v6 \
+appgraph build apps/todo/blueprint/main.graph.yaml \
+    --output-dir apps/todo-v6 \
     --llm claude_cli \
-    2>&1 | tee "logs/console/build_app-$(date +%Y-%m-%d-%H-%M-%S).md"
+    2>&1 | tee "build-$(date +%Y-%m-%d-%H-%M-%S).log"
 ```
 
-The `tee` keeps the console output live while also capturing it to a
-timestamped file under `logs/console/` — useful since a failed build's real
-error (e.g. a `pytest`/SQLAlchemy traceback) often scrolls past the terminal
-buffer before you can read it, and `spl3`'s own log (path printed as `Log:`
-at the end of the run) captures the workflow trace but not the raw stdout.
+The `tee` keeps the console output live while also capturing it to a timestamped
+file — useful since a failed build's real error (e.g. a `pytest`/SQLAlchemy
+traceback) often scrolls past the terminal buffer before you can read it. The run's
+own log (path printed as `[build] log:` at the end) captures the recipe trace but not
+the raw stdout.
 
-Each component is then written to `{output_dir}/{component_id}/` — i.e.
+Each component is written to `{output_dir}/{component_id}/` — i.e.
 `apps/todo-v6/backend/` and `apps/todo-v6/frontend/` for the command above —
-leaving the existing `apps/todo/backend`/`apps/todo/frontend` untouched.
+leaving the existing `apps/todo/backend`/`apps/todo/frontend` untouched. Useful flags:
+`--max-llm-calls N` (cap on model calls), `--max-test-attempts N` (test runs, each
+failure gets one repair; default 3), `--no-cache` (regenerate every node instead of
+reusing `<output>/.agr_cache`), `--tech-profile` (single component only). Run
+`appgraph build -h` for all of them. To build one component, pass its graph, e.g.
+`appgraph build apps/todo/blueprint/backend.graph.yaml`.
 
-See [docs/DEV/BUILD/README.md](../../docs/DEV/BUILD/README.md) §12.1 for full build options and §12.4 for `--output_dir` usage.
-
-**Building to a redirected `-p output_dir=...` location** (e.g. to generate a fresh copy without
+**Building to a redirected `--output-dir`** (e.g. to generate a fresh copy without
 touching `apps/todo/backend`/`apps/todo/frontend`): the build seeds each component's pre-authored
 scaffold (`tests/`, and for the frontend also `package.json`/`package-lock.json`/`vite.config.ts`/
 `tsconfig.json`/`index.html`/`.env`) into the new location automatically, but **deliberately does
 not copy `node_modules/`** (copying a dependency tree risks silent drift from `package.json` —
 reinstalling is safer). If the frontend build halts with `vitest: not found` (exit 127), run
 `npm install` by hand in the redirected frontend directory once, then re-run the same
-`spl3 run spl/build_app.spl ...` command — it picks up where it left off (the backend and any
-already-passing frontend nodes are cached, so only the remaining work re-runs). See
-[docs/DEV/BUILD/README.md](../../docs/DEV/BUILD/README.md) §12.4 for the original incident this
-was found and fixed from.
+`appgraph build ...` command — it picks up where it left off (the backend and any
+already-passing frontend nodes are cached, so only the remaining work re-runs).
+
+You can check the blueprints before spending model calls: `appgraph validate apps/todo/blueprint/main.graph.yaml`
+(the system and every import) and `appgraph order apps/todo/blueprint/backend.graph.yaml` (the order nodes are generated in).
 
 **2. Start the backend:**
 

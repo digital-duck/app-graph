@@ -100,7 +100,7 @@ class TestBlueprint:
         assert blueprint.system_readme_path(TODO / "main.graph.yaml", tmp_path) == tmp_path / "README.md"
 
 
-# ── cache: compatible with graph-code's .spl_cache ──────────────────────────────────────────────────────────────────
+# ── cache: same keys and layout as graph-code's .spl_cache, now under .agr_cache ──────────────────────────────────────────────────────────────────
 
 class TestCache:
     def test_reads_graph_code_cache_for_every_node(self):
@@ -115,7 +115,7 @@ class TestCache:
 
     def test_put_get_and_misses(self, tmp_path):
         k = cache.put("orm_model", "code", "spec", "python_fastapi", tmp_path)
-        assert (tmp_path / ".spl_cache" / f"{k}.json").exists()
+        assert (tmp_path / ".agr_cache" / f"{k}.json").exists()
         assert cache.get(BACKEND, "orm_model", "spec", "python_fastapi", tmp_path) == "code"
         assert cache.get(BACKEND, "orm_model", "other spec", "python_fastapi", tmp_path) is None
         assert cache.get(BACKEND, "orm_model", "spec", "python_fastapi", tmp_path, use_cache=False) is None

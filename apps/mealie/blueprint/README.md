@@ -49,7 +49,7 @@ Build the app first, then start both services:
 
 ```bash
 # Build
-spl3 run spl/build_app.spl apps/mealie/blueprint/main.graph.yaml
+appgraph build apps/mealie/blueprint/main.graph.yaml
 
 # Start backend (port 8003)
 cd apps/mealie/backend

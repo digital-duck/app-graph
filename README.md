@@ -98,8 +98,9 @@ All three follow the same rules:
 - Every run has a cap on model calls.
 - Each run writes a log under `~/app-graph/logs/`.
 
-Generated code is cached per node in `<output>/.spl_cache/`. That cache can
-be read by both graph-code and app-graph. `extract --llm` keeps a checkpoint,
+Generated code is cached per node in `<output>/.agr_cache/` (graph-code's
+`.spl_cache/` has the same keys and layout: rename the folder to reuse it).
+`extract --llm` keeps a checkpoint,
 so a pass that died partway resumes where it stopped.
 
 The deterministic work happens outside the recipes, in `appgraph.build`:
@@ -136,8 +137,7 @@ app-graph/
 
 | Command | Purpose |
 |---|---|
-| `appgraph validate <graph.yaml>` | `validate_full()` a component, or the whole system (every import + call contracts) if it has `imports:` |
-| `appgraph validate-all <dir>` | Validate every `graph.yaml` under a folder |
+| `appgraph validate <path>` | A file: `validate_full()` a component, or the whole system (every import + call contracts) if it has `imports:`. A folder: validate every graph under it (`--fail-fast`, `--format`, `--out`) |
 | `appgraph order <graph.yaml>` | Print `build_order()` |
 | `appgraph report <graph.yaml> [--out FILE]` | Node/edge/import counts |
 | `appgraph prettify <path> [--write]` | Normalize prose scalars to `\|` block literals |

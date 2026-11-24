@@ -282,8 +282,8 @@ graph-code's per-node cache is read as is. A component rebuilt from it must give
 
 ```bash
 V=~/app-graph/verify; rm -rf $V/todo_backend; mkdir -p $V/todo_backend/app
-F=tests/fixtures/todo_backend          # graph-code's generated backend, with its .spl_cache
-cp -r $F/.spl_cache $F/tests $V/todo_backend/; cp $F/app/__init__.py $V/todo_backend/app/
+F=tests/fixtures/todo_backend          # graph-code's generated backend, with its cache (now .agr_cache)
+cp -r $F/.agr_cache $F/tests $V/todo_backend/; cp $F/app/__init__.py $V/todo_backend/app/
 appgraph build apps/todo/blueprint/backend.graph.yaml --output-dir $V/todo_backend --max-llm-calls 0
 diff -r $F/app $V/todo_backend/app && echo IDENTICAL
 ```
@@ -382,3 +382,16 @@ git -C ~/projects/digital-duck/graflang checkout -- cookbook_pocketflow cookbook
 - graflang `tests/test_recipes_api.py`: 15 passed. graflang full suite: GL_COUNT (before the stock_report/pocketflow follow-up: 1956 passed, 3 failed on folders that did not exist).
 - work-graph: 125 passed.
 - app-graph: 173 passed; `validate-all apps`: 47 passed, 0 failed, 10 warnings; todo backend from graph-code's cache: 22 passed, 0 calls, identical.
+
+## 7. TODO
+
+### fix .spl_cache
+
+- appgraph/build/ is incomplete here: only tech_profiles.py exists. That is also all SOURCES.txt in the egg-info lists under build/, and a search of the filesystem found no copy of cache.py. Nothing else in src/ (the recipes, builder.py, run.py) mentions the folder name. The only other copy of the logic is the original cache_get/cache_put in graph-code/src/graph_code/spl/tools.py.
+- Cause: .gitignore line 11 is build/, so the package was never committed. The grafwork/app-graph/ working copy, the repo's own tests and the README all describe a build/ package that this clone doesn't contain.
+- Effect: appgraph build can't run from this checkout, and tests/test_build_lib.py can't import. Both were already true before my rename. The .agr_cache change in the help text, the tests, the fixture folder and the docs is ready, but nothing in this checkout writes that folder name yet.
+
+Two ways forward:
+
+1. Restore the real package (my recommendation). Copy src/appgraph/build/*.py from wherever it lives, probably the machine with the /home/gongai/... paths, into this checkout. Then the fix is one constant in build/cache.py (".spl_cache" → ".agr_cache"). I'll make that change and fix .gitignore to /build/ so it gets committed this time.
+2. Rebuild build/cache.py from graph-code's spl/tools.py. I'd have to reproduce the cache key scheme and the put/get signatures that test_build_lib.py expects. The rest of the package (steps.py, blueprint.py, verify.py, …) is also missing, so this would only fix the name and nothing would run. I don't recommend it unless you want to start rebuilding the package.

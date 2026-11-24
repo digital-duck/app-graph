@@ -80,7 +80,7 @@ Build the application first, then start both components:
 
 ```bash
 # Build
-spl3 run spl/build_app.spl --app kanban
+appgraph build apps/kanban/blueprint/main.graph.yaml
 
 # Start backend (from apps/kanban/backend)
 uvicorn app.main:app --port 8002
