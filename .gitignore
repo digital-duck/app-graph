@@ -8,7 +8,7 @@ __pycache__/
 
 # Distribution / packaging
 .Python
-build/
+/build/               # the top-level build output only: src/appgraph/build/ is source code and must be committed
 develop-eggs/
 dist/
 downloads/

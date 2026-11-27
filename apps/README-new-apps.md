@@ -1,5 +1,8 @@
 # Candidate apps for Path-B ingestion
 
+> **2026-11-27:** the worked examples `todo1` and `todo2A` named on this page are no longer in `apps/` (`apps/todo` is the one todo app, and the exact copies `todo-copy` and
+> `todo2A-copy` are gone). To read them, use git history: `git show 55cad44:apps/todo1/blueprint/main.graph.yaml`. The commands below work the same for any source repo: set `APP_NAME` to a new name.
+
 > **Note (app-graph 0.2.0):** this page was carried over from graph-code. The build history below was recorded with graph-code's `spl3` pipeline (so names like `spl/tools.py` and `integrate_system.spl` in the narrative are the old ones); the commands are updated to the current CLI. To build today, run `appgraph build apps/<app>/blueprint/main.graph.yaml`, which uses the GraphLang recipes (see `docs/GUIDE/User-Guide.md`). The per-node cache folder is now `.agr_cache/` (graph-code's `.spl_cache/` has the same layout: rename it to reuse it).
 
 

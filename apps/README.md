@@ -83,6 +83,9 @@ than hand-authored — a separate pipeline from the "Reference apps" table above
 migrated by reading source `graph.yaml`/`system.yaml` directly; this one reverse-engineers a
 blueprint from an existing repo's AST + an LLM semantic pass).
 
+> **2026-11-27:** the extracted `todo1` and `todo2A` apps (and the copies `todo-copy` and `todo2A-copy`) were removed from `apps/`; `apps/todo` is the one todo app. Their blueprints and
+> extraction artefacts are in git history (path `apps/todo1/`, `apps/todo2A/`; last present at commit `55cad44`). The rows and notes below are the record of what they showed.
+
 | App | domain_type | Status | Source | Pending |
 |---|---|---|---|---|
 | **todo1** | `integrated` | **Milestone: full pipeline verified end-to-end, manually confirmed in a browser by Wen** — 25/25 backend pytest, 13/13 frontend vitest, 6/6 system acceptance tests | [hvlds/todo](https://github.com/hvlds/todo), simplified (Docker stripped, `requirements.txt` pinned so it installs today, SQLite already in use) at `$HOME/projects/wgong/graph-code-apps/todo1` | None — first `appgraph extract`-sourced app fully done, browser and all. |
